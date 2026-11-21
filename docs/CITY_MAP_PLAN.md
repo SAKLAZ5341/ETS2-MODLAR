@@ -94,3 +94,12 @@ ile programatik üretim. TruckLib 0.5.3, harita sürümü 907'yi (ETS2 1.59–1.
   hata kodu yok → donma/güç kesintisi). Önizlemeyi **editör kapalıyken tek başına** çalıştırmak sorunsuz oldu.
 - Eksikler: (0,0,0) yol üstünde değil, tır toprak tümseğe doğuyor → başlangıç noktası/şirket gerekli;
   merkezde üst üste binen paralel yollar var; D-100/TEM kavşakları ve sık kesişimler hâlâ prefabsız.
+
+## 9. Başlangıç noktası – 2026-11-21 13:50
+
+- Önizleme tırı her zaman (0,0,0)'a, -Z yönüne bakarak koyuyor. `buildgraph` artık haritayı kaydırıyor:
+  Z eksenine paralel (±4°), ≥ 50 m düz, kavşaklardan ≥ 60 m ve başka yoldan ≥ 25 m uzak, orijine en yakın
+  `r1_city`/`r2_divided` parçasının ortası (0,0)'a geliyor (`mapping.json` → `spawn` ile ayarlanabilir).
+  Seçilen: kenar 7052 (r1_city), eski konum (964,2; -1522,4).
+- Oyunda tır yol üstünde doğdu ve sürüldü (119 km/s). Görüntü: `docs/img/ingame_spawn_on_road.jpg`.
+- Eksik: arazi yok; yol dışı boşluk ve tır yoldan çıkınca düşüyor.

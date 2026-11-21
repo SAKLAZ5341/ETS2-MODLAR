@@ -31,7 +31,7 @@ internal static class Program
         {
             "list" => ListDefs(cfg),
             "build" => Build(cfg, args.Length > 1 ? args[1] : "data/processed/map_export_s3.json"),
-            "reflect" => Reflect(),
+            "reflect" => Reflect(args.Skip(1).ToArray()),
             "modelinfo" => ModelInfo(cfg, args.Skip(1).ToArray()),
             "prefabinfo" => PrefabInfo(cfg, args.Skip(1).ToArray()),
             "buildgraph" => BuildGraph(cfg, args.Length > 1 ? args[1] : "data/processed/map_graph_s3.json",
@@ -67,10 +67,11 @@ internal static class Program
     }
 
     // ---------------------------------------------------------------- reflect (API keşfi)
-    static int Reflect()
+    static int Reflect(string[] names)
     {
         var asm = typeof(TruckLib.Models.Model).Assembly;
-        foreach (var t in asm.GetExportedTypes().Where(t => t.Name is "Model" or "Look" or "Variant" or "Part"))
+        if (names.Length == 1 && names[0] == "?") { foreach (var t in asm.GetExportedTypes().OrderBy(t => t.FullName)) Console.WriteLine(t.FullName); return 0; }
+        foreach (var t in asm.GetExportedTypes().Where(t => names.Length == 0 ? t.Name is "Model" or "Look" or "Variant" or "Part" : names.Contains(t.Name) || names.Contains("*")))
         {
             Console.WriteLine($"== {t.FullName}");
             foreach (var m in t.GetMembers(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.DeclaredOnly))
@@ -224,6 +225,11 @@ internal static class Program
 
         var map = new Map { NormalScale = scale, CityScale = scale };
 
+        // 0) başlangıç noktası: önizleme tırı (0,0,0)'a, -Z yönüne bakarak koyar. Haritayı, düz ve
+        //    boş bir şehir yolu parçasının ortası orijine gelecek şekilde kaydırırız.
+        var off = FindSpawnOffset(graph, cfg);
+        Vector3 V(double x, double z) => new Vector3((float)x + off.X, 0, (float)z + off.Y);
+
         // 1) kavşak prefabları: en iyi dönüş + kol/düğüm eşlemesi
         var attach = new Dictionary<(int edge, string end), (Prefab p, Vector3 nodePos, Vector3 center, float radius)>();
         int placed = 0, rejected = 0;
@@ -232,7 +238,7 @@ internal static class Program
         {
             var arms = jn.GetProperty("arms").EnumerateArray().ToList();
             var armCls = arms.Select(a => a.TryGetProperty("cls", out var c) ? c.GetString() : "r1").ToArray();
-            var center = new Vector3((float)jn.GetProperty("x").GetDouble(), 0, (float)jn.GetProperty("z").GetDouble());
+            var center = V(jn.GetProperty("x").GetDouble(), jn.GetProperty("z").GetDouble());
             var armDir = arms.Select(a => Vector2.Normalize(new Vector2((float)a.GetProperty("dir")[0].GetDouble(), (float)a.GetProperty("dir")[1].GetDouble()))).ToList();
 
             float bestCost = float.MaxValue, bestMax = 0; int bestYaw = 0; int[] bestPerm = null;
@@ -290,7 +296,7 @@ internal static class Program
             var kind = e.GetProperty("type").GetString();
             var token = types.TryGetProperty(kind, out var t) ? t.GetString() : "ger1";
             float ts = terrain.TryGetProperty(kind, out var tz) ? (float)tz.GetDouble() : (float)terrain.GetProperty("default").GetDouble();
-            var pts = e.GetProperty("pts").EnumerateArray().Select(p => new Vector3((float)p[0].GetDouble(), 0, (float)p[1].GetDouble())).ToList();
+            var pts = e.GetProperty("pts").EnumerateArray().Select(p => V(p[0].GetDouble(), p[1].GetDouble())).ToList();
             attach.TryGetValue((id, "a"), out var sa);
             attach.TryGetValue((id, "b"), out var sb);
             bool hasA = sa.p != null, hasB = sb.p != null;
@@ -326,7 +332,7 @@ internal static class Program
         }
 
         // 3) binalar (map_export'tan, place=true olanlar)
-        int buildings = AddBuildings(map, cfg, Path.Combine(Root, exportRel));
+        int buildings = AddBuildings(map, cfg, Path.Combine(Root, exportRel), new Vector3(off.X, 0, off.Y));
 
         var outDir = cfg.GetProperty("output_map_dir").GetString();
         var name = cfg.GetProperty("output_map_name").GetString();
@@ -337,7 +343,52 @@ internal static class Program
         return 0;
     }
 
-    static int AddBuildings(Map map, JsonElement cfg, string exportPath)
+    // Düz (Z eksenine paralel), kavşaklardan ve diğer yollardan uzak bir şehir yolu parçası bulur;
+    // ortasını orijine taşıyacak kaydırmayı (X, Z) döndürür.
+    static Vector2 FindSpawnOffset(JsonElement graph, JsonElement cfg)
+    {
+        var sp = cfg.TryGetProperty("spawn", out var s) ? s : default;
+        double Opt(string k, double d) => sp.ValueKind == JsonValueKind.Object && sp.TryGetProperty(k, out var v) ? v.GetDouble() : d;
+        double minLen = Opt("min_len", 50), maxErr = Opt("max_dir_err_deg", 4), clear = Opt("clearance", 25), junc = Opt("junction_clearance", 60);
+        var okTypes = sp.ValueKind == JsonValueKind.Object && sp.TryGetProperty("types", out var tt)
+            ? tt.EnumerateArray().Select(x => x.GetString()).ToHashSet() : new HashSet<string> { "r1_city", "r2_divided" };
+
+        var segs = new List<(int edge, Vector2 a, Vector2 b)>();
+        var edges = graph.GetProperty("edges").EnumerateArray().ToList();
+        foreach (var e in edges)
+        {
+            var pts = e.GetProperty("pts").EnumerateArray().Select(p => new Vector2((float)p[0].GetDouble(), (float)p[1].GetDouble())).ToList();
+            for (int i = 1; i < pts.Count; i++) segs.Add((e.GetProperty("id").GetInt32(), pts[i - 1], pts[i]));
+        }
+        var juncs = graph.GetProperty("junctions").EnumerateArray().Select(j => new Vector2((float)j.GetProperty("x").GetDouble(), (float)j.GetProperty("z").GetDouble())).ToList();
+        static float SegDist(Vector2 p, Vector2 a, Vector2 b)
+        {
+            var ab = b - a; float t = ab.LengthSquared() < 1e-6f ? 0 : Math.Clamp(Vector2.Dot(p - a, ab) / ab.LengthSquared(), 0, 1);
+            return Vector2.Distance(p, a + t * ab);
+        }
+        var typeOf = edges.ToDictionary(e => e.GetProperty("id").GetInt32(), e => e.GetProperty("type").GetString());
+        var best = (d: float.MaxValue, mid: Vector2.Zero, edge: -1);
+        foreach (var (edge, a, b) in segs)
+        {
+            if (!okTypes.Contains(typeOf[edge])) continue;
+            var d = b - a; float len = d.Length();
+            if (len < minLen) continue;
+            float err = MathF.Acos(MathF.Abs(d.Y) / len) * 180f / MathF.PI;
+            if (err > maxErr) continue;
+            var mid = (a + b) / 2;
+            if (mid.Length() >= best.d) continue;
+            if (juncs.Any(j => Vector2.Distance(j, mid) < junc)) continue;
+            // aynı parçanın uçları hariç, başka hiçbir yol parçası 'clear' m içinde olmamalı (yan yola ve paralel yollara karşı)
+            bool busy = segs.Any(o => o.edge != edge && SegDist(mid, o.a, o.b) < clear);
+            if (busy) continue;
+            best = (mid.Length(), mid, edge);
+        }
+        if (best.edge < 0) { Console.WriteLine("Başlangıç: uygun yol bulunamadı, kaydırma yok."); return Vector2.Zero; }
+        Console.WriteLine($"Başlangıç: kenar {best.edge} ({typeOf[best.edge]}), eski konum ({best.mid.X:F1}, {best.mid.Y:F1}) → (0,0)");
+        return -best.mid;
+    }
+
+    static int AddBuildings(Map map, JsonElement cfg, string exportPath, Vector3 off)
     {
         if (!File.Exists(exportPath)) return 0;
         var export = JsonDocument.Parse(File.ReadAllText(exportPath)).RootElement;
@@ -352,7 +403,7 @@ internal static class Program
             var parts = spec.Split('|');
             long osm = bl.GetProperty("osm").GetInt64();
             string Pick(int i, string fb) => parts.Length <= i || parts[i].Length == 0 ? fb : parts[i].Split(',')[(int)(Math.Abs(osm) % parts[i].Split(',').Length)];
-            var pos = new Vector3((float)bl.GetProperty("x").GetDouble(), 0f, (float)bl.GetProperty("z").GetDouble());
+            var pos = off + new Vector3((float)bl.GetProperty("x").GetDouble(), 0f, (float)bl.GetProperty("z").GetDouble());
             var m = Model.Add(map, pos, parts[0], Pick(1, "default"), Pick(2, "default"));
             m.Node.Rotation = Quaternion.CreateFromYawPitchRoll((float)(bl.GetProperty("heading_deg").GetDouble() * Math.PI / 180.0), 0, 0);
             n++;
