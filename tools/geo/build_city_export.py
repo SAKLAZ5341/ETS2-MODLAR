@@ -48,9 +48,10 @@ def main() -> None:
     ap.add_argument("--min-seg", type=float, default=2.0, help="en kısa yol parçası (oyun m)")
     ap.add_argument("--exclude", nargs="*", default=[], help="dışlanacak OSM highway sınıfları")
     ap.add_argument("--road-clearance", type=float, default=8.0, help="bina merkezi - yol arası en az oyun m")
-    ap.add_argument("--min-building-gap", type=float, default=18.0, help="bina merkezleri arası en az oyun m")
-    ap.add_argument("--max-buildings", type=int, default=1600, help="en büyükten başlayarak en fazla bu kadar bina (editör öğe sınırı)")
+    ap.add_argument("--min-building-gap", type=float, default=15.0, help="bina merkezleri arası en az oyun m")
+    ap.add_argument("--max-buildings", type=int, default=3500, help="en büyükten başlayarak en fazla bu kadar bina (editör öğe sınırı)")
     ap.add_argument("--road-clearance-default", type=float, default=8.0)
+    ap.add_argument("--max-detailed", type=int, default=600, help="detaylı (ana cadde) model sayısı üst sınırı; çizim bütçesi")
     a = ap.parse_args()
     S = a.scale
     s, w, n, e = CFG["core_bbox_swne"]
@@ -127,6 +128,8 @@ def main() -> None:
         from shapely.strtree import STRtree
         rlines = [LineString(r["pts"]) for r in roads if r["prio"] <= 8]
         tree = STRtree(rlines)
+        mlines = [LineString(r["pts"]) for r in roads if r["prio"] <= 6]  # ana caddeler (tertiary ve üstü)
+        mtree = STRtree(mlines)
         cell = defaultdict(list)
         CELL = a.min_building_gap
         for b in sorted(buildings, key=lambda b: -b["area_real_m2"]):
@@ -140,13 +143,20 @@ def main() -> None:
             if any(math.dist(p, q) < CELL for dx in (-1, 0, 1) for dz in (-1, 0, 1) for q in cell[(k[0] + dx, k[1] + dz)]):
                 continue
             cell[k].append(p)
+            # ana caddeye 35 oyun m'den yakın binalar detaylı modelle, diğerleri düşük detaylı (mid) modelle
+            b["near_main"] = any(mlines[i].distance(pt) < 35 for i in mtree.query(pt.buffer(35)))
             placed.append(b)
             if a.max_buildings and len(placed) >= a.max_buildings:
                 break
     for b in buildings:
         b["place"] = False
-    for b in placed:
+    nd = 0
+    for b in placed:  # alan sırasıyla: en büyük ana cadde binaları detaylı kalır
         b["place"] = True
+        if b.get("near_main"):
+            nd += 1
+            if nd > a.max_detailed:
+                b["near_main"] = False
 
     out = {"meta": {"scale_divisor": S, "origin_osm_node": 26505108, "axes": "+X doğu, +Z güney, Y=0",
                     "core_bbox_swne": CFG["core_bbox_swne"],

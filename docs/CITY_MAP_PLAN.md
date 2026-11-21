@@ -164,3 +164,14 @@ Hedef: Gebze + Darıca + Dilovası, gerçekçi ve oynanabilir. Sıra:
 - Önizlemede AI trafiği etkin (logda trafik römorku yükleme denemeleri), kırsal başlangıç noktasında seyrek.
 - **Oynatma:** masaüstünde "SAKLAZ Gebze Haritasi" kısayolu → `tools/play/play_saklaz.ps1` (editörü kapatır,
   önizlemeyi başlatır). Oyun içi arayüz otomatik tıklamaya yanıt vermediğinden iş pazarı ekrandan doğrulanamadı.
+
+## 15. Çizim bütçesi ve 3.235 bina – 2026-11-21 18:00
+
+- Taşma oyunda da oluyor (`r_param_packet`, 16 bit kimlik): harita küçük olduğu için tüm sektörler aynı anda
+  yükleniyor ve toplam çizim parçası (model × parça) sınırı aşılıyor. Görüş mesafesi/yansıma ayarı etkisiz.
+- `modelinfo` artık parça sayısını yazıyor → `data/processed/game_defs/building_model_costs.csv` (656 model).
+  Batı Balkan blokları 135–202 parça (asıl sorun), Türk apartmanları 22–50, "mid" köy/apartman modelleri 2–7.
+- `build_city_export.py`: ana caddeye (tertiary+) 35 m içindeki en büyük 600 bina detaylı Türk modeli
+  (`near_main`), kalanlar `*_far` listelerinden az parçalı Akdeniz/Balkan "mid" modelleri.
+- Sonuç: **3.235 bina** oyunda taşmadan yükleniyor (4.157'de taşıyor). Editörden geçirmeden de oynanıyor.
+- GitHub: `SAKLAZ5341/ETS2-MODLAR` (main).

@@ -34,13 +34,40 @@
       "dlc_blke_45|original|default"
     ],
     "commercial": [
-      "dlc_blke_53|var1|default",
-      "dlc_blke_47|all|default"
+      "blkw_2f007|default,brand_2,brand_3,brand_4,brand_5,brand_6|brand_1",
+      "blkw_34001|default|default",
+      "dlc_blke_45|original|default"
     ],
     "industrial": [
       "3z001|variant1,variant2,variant3,variant4|blue,green,yellow,red,light,dark"
     ],
     "mosque": [
+      "blke_0w002|default|default"
+    ],
+    "view_distance": 250,
+    "small_house_far": [
+      "blkw_0v015|default|white,light_yellow,orange,dark_grey,dark_blue",
+      "blkw_3m01s|default|gray,yellow,white,brown,blue",
+      "greece_12004|default|yell_orang,whit_blue,gray_white,white,orang_red,orange_blue",
+      "greece_25007|default|white,redgray,orange,yellow,red,grayblue",
+      "blkw_3j006|default|default,color1,color2",
+      "blkw_3000x|default|default,orange,yellow,blue,green"
+    ],
+    "apartment_far": [
+      "blkw_01014|default|default",
+      "blkw_0v014|default|white,orangeish,yellow,pinkish",
+      "blkw_3200u|roofwind,roofnowind|default",
+      "blkw_3000p|default,variant1|default,wight,yellow,red"
+    ],
+    "commercial_far": [
+      "blkw_0v014|default|white,orangeish,yellow,pinkish",
+      "blkw_34001|default|default"
+    ],
+    "industrial_far": [
+      "blke_46|default|default,bluegrey",
+      "blke_45|default|default"
+    ],
+    "mosque_far": [
       "blke_0w002|default|default"
     ]
   },

@@ -33,7 +33,7 @@ internal static class Program
             "extract" => Extract(cfg, args.Skip(1).ToArray()),
             "build" => Build(cfg, args.Length > 1 ? args[1] : "data/processed/map_export_s3.json"),
             "reflect" => Reflect(args.Skip(1).ToArray()),
-            "modelinfo" => ModelInfo(cfg, args.Skip(1).ToArray()),
+            "modelinfo" => ModelInfo(cfg, args.Skip(1).SelectMany(a => a.StartsWith("@") ? File.ReadAllLines(a[1..]) : new[] { a }).Where(s => s.Length > 0).ToArray()),
             "prefabinfo" => PrefabInfo(cfg, args.Skip(1).ToArray()),
             "buildgraph" => BuildGraph(cfg, args.Length > 1 ? args[1] : "data/processed/map_graph_s3.json",
                                        args.Length > 2 ? args[2] : "data/processed/map_export_s3.json"),
@@ -124,7 +124,7 @@ internal static class Program
             try
             {
                 var m = TruckLib.Models.Model.Open(p, hit.fs);
-                Console.WriteLine($"{p} [{hit.name}]: looks=[{string.Join(",", m.Looks.Select(l => l.Name))}] variants=[{string.Join(",", m.Variants.Select(v => v.Name))}] boyut={m.BoundingBox}");
+                var bb = m.BoundingBox; Console.WriteLine($"{p} [{hit.name}]: parça={m.Parts.Sum(pt => pt.Pieces.Count)} looks=[{string.Join(",", m.Looks.Select(l => l.Name))}] variants=[{string.Join(",", m.Variants.Select(v => v.Name))}] boyut={bb.End - bb.Start}");
             }
             catch (Exception ex) { Console.WriteLine($"{p}: HATA {ex.GetType().Name}: {ex.Message}"); }
         }
@@ -575,6 +575,10 @@ internal static class Program
             if (noBuild != null && noBuild.Any(z => Vector3.DistanceSquared(z.c, pos) < z.r * z.r)) continue;
             var m = Model.Add(map, pos, parts[0], Pick(1, "default"), Pick(2, "default"));
             m.Node.Rotation = Quaternion.CreateFromYawPitchRoll((float)(bl.GetProperty("heading_deg").GetDouble() * Math.PI / 180.0), 0, 0);
+            // çizim yükü (r_param_packet taşması): ayna/su yansıması kapalı, görüş mesafesi kısa
+            if (b.TryGetProperty("view_distance", out var vd)) m.ViewDistance = (ushort)vd.GetInt32();
+            m.MirrorReflection = false;
+            m.WaterReflection = false;
             n++;
         }
         return n;
@@ -600,6 +604,9 @@ internal static class Program
             "mosque" or "religious" => "mosque",
             _ => (bl.GetProperty("area_real_m2").GetDouble() > 250 ? "apartment" : "small_house"),
         };
+        // ana caddeden uzak binalar: "<tür>_far" listesi (az parçalı mid modeller; çizim bütçesi)
+        bool near = bl.TryGetProperty("near_main", out var nm) && nm.GetBoolean();
+        if (!near && b.TryGetProperty(key + "_far", out _)) key += "_far";
         if (!b.TryGetProperty(key, out var v)) return null;
         if (v.ValueKind == JsonValueKind.String) return v.GetString();
         // liste: OSM id'ye göre sabit ama çeşitli seçim
