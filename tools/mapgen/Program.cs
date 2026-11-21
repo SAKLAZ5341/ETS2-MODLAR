@@ -212,60 +212,70 @@ internal static class Program
         var gameRoot = cfg.GetProperty("game_root").GetString();
         using var fs = HashFsReader.Open(Path.Combine(gameRoot, "base.scs"));
 
-        var specs = new Dictionary<int, (string token, TruckLib.Models.Ppd.PrefabDescriptor ppd)>();
-        foreach (var arms in new[] { 3, 4 })
-        {
-            var j = jcfg.GetProperty(arms.ToString());
-            specs[arms] = (j.GetProperty("token").GetString(),
-                           TruckLib.Models.Ppd.PrefabDescriptor.Open(j.GetProperty("ppd").GetString(), fs));
-        }
+        // prefab listesi: her birinin düğüm sınıfları (r1/r2) .ppd düğüm sırasıyla
+        var specList = new List<(string token, TruckLib.Models.Ppd.PrefabDescriptor ppd, string[] cls, string variant)>();
+        foreach (var j in jcfg.GetProperty("prefabs").EnumerateArray())
+            specList.Add((j.GetProperty("token").GetString(),
+                          TruckLib.Models.Ppd.PrefabDescriptor.Open(j.GetProperty("ppd").GetString(), fs),
+                          j.GetProperty("classes").EnumerateArray().Select(c => c.GetString()).ToArray(),
+                          j.TryGetProperty("variant", out var vv) ? vv.GetString() : null));
         string look = jcfg.GetProperty("look").GetString(), variant = jcfg.GetProperty("variant").GetString();
         float maxErr = (float)jcfg.GetProperty("max_angle_error_deg").GetDouble();
 
         var map = new Map { NormalScale = scale, CityScale = scale };
 
         // 1) kavşak prefabları: en iyi dönüş + kol/düğüm eşlemesi
-        var attach = new Dictionary<(int edge, string end), (Prefab p, Vector3 nodePos, Vector3 center)>();
+        var attach = new Dictionary<(int edge, string end), (Prefab p, Vector3 nodePos, Vector3 center, float radius)>();
         int placed = 0, rejected = 0;
+        var byToken = new Dictionary<string, int>();
         foreach (var jn in graph.GetProperty("junctions").EnumerateArray())
         {
             var arms = jn.GetProperty("arms").EnumerateArray().ToList();
-            if (!specs.TryGetValue(arms.Count, out var spec)) continue;
+            var armCls = arms.Select(a => a.TryGetProperty("cls", out var c) ? c.GetString() : "r1").ToArray();
             var center = new Vector3((float)jn.GetProperty("x").GetDouble(), 0, (float)jn.GetProperty("z").GetDouble());
-            var nodePos = spec.ppd.Nodes.Select(nd => nd.Position).ToList();
             var armDir = arms.Select(a => Vector2.Normalize(new Vector2((float)a.GetProperty("dir")[0].GetDouble(), (float)a.GetProperty("dir")[1].GetDouble()))).ToList();
 
             float bestCost = float.MaxValue, bestMax = 0; int bestYaw = 0; int[] bestPerm = null;
-            var perms = Permutations(Enumerable.Range(0, nodePos.Count).ToArray()).ToList();
-            for (int yawDeg = 0; yawDeg < 360; yawDeg++)
+            (string token, TruckLib.Models.Ppd.PrefabDescriptor ppd, string[] cls, string variant) spec = default;
+            foreach (var sp in specList.Where(s => s.cls.Length == arms.Count))
             {
-                var q = Quaternion.CreateFromYawPitchRoll(yawDeg * MathF.PI / 180f, 0, 0);
-                var nd = nodePos.Select(p => { var v = Vector3.Transform(p, q); return Vector2.Normalize(new Vector2(v.X, v.Z)); }).ToList();
-                foreach (var perm in perms)
+                if (!sp.cls.OrderBy(x => x).SequenceEqual(armCls.OrderBy(x => x))) continue;
+                var nodeP = sp.ppd.Nodes.Select(nd => nd.Position).ToList();
+                var perms = Permutations(Enumerable.Range(0, nodeP.Count).ToArray())
+                    .Where(pm => Enumerable.Range(0, armCls.Length).All(i => sp.cls[pm[i]] == armCls[i])).ToList();
+                for (int yawDeg = 0; yawDeg < 360; yawDeg++)
                 {
-                    float cost = 0, mx = 0;
-                    for (int i = 0; i < armDir.Count; i++)
+                    var q = Quaternion.CreateFromYawPitchRoll(yawDeg * MathF.PI / 180f, 0, 0);
+                    var nd = nodeP.Select(p => { var v = Vector3.Transform(p, q); return Vector2.Normalize(new Vector2(v.X, v.Z)); }).ToList();
+                    foreach (var perm in perms)
                     {
-                        float ang = MathF.Acos(Math.Clamp(Vector2.Dot(armDir[i], nd[perm[i]]), -1f, 1f)) * 180f / MathF.PI;
-                        cost += ang; mx = MathF.Max(mx, ang);
+                        float cost = 0, mx = 0;
+                        for (int i = 0; i < armDir.Count; i++)
+                        {
+                            float ang = MathF.Acos(Math.Clamp(Vector2.Dot(armDir[i], nd[perm[i]]), -1f, 1f)) * 180f / MathF.PI;
+                            cost += ang; mx = MathF.Max(mx, ang);
+                        }
+                        if (cost < bestCost) { bestCost = cost; bestMax = mx; bestYaw = yawDeg; bestPerm = perm; spec = sp; }
                     }
-                    if (cost < bestCost) { bestCost = cost; bestMax = mx; bestYaw = yawDeg; bestPerm = perm; }
                 }
             }
-            if (bestMax > maxErr) { rejected++; continue; }
+            if (bestPerm == null || bestMax > maxErr) { rejected++; continue; }
+            var nodePos = spec.ppd.Nodes.Select(nd => nd.Position).ToList();
+            float radius = nodePos.Max(p => new Vector2(p.X, p.Z).Length()) + 3f;
             try
             {
                 var qb = Quaternion.CreateFromYawPitchRoll(bestYaw * MathF.PI / 180f, 0, 0);
                 var node0World = center + Vector3.Transform(nodePos[0], qb);
                 var pf = Prefab.Add(map, node0World, spec.token, spec.ppd, qb);
                 pf.Look = look;
-                pf.Variant = variant;
+                pf.Variant = spec.variant ?? variant;
                 for (int i = 0; i < arms.Count; i++)
                 {
                     var want = center + Vector3.Transform(nodePos[bestPerm[i]], qb);
                     var actual = pf.Nodes.OrderBy(n => Vector3.DistanceSquared(n.Position, want)).First().Position;
-                    attach[(arms[i].GetProperty("edge").GetInt32(), arms[i].GetProperty("end").GetString())] = (pf, actual, center);
+                    attach[(arms[i].GetProperty("edge").GetInt32(), arms[i].GetProperty("end").GetString())] = (pf, actual, center, radius);
                 }
+                byToken[spec.token] = byToken.GetValueOrDefault(spec.token) + 1;
                 placed++;
             }
             catch (Exception ex) { rejected++; if (rejected < 10) Console.WriteLine($"kavşak {jn.GetProperty("id")}: {ex.Message}"); }
@@ -287,7 +297,7 @@ internal static class Program
             if (hasA && hasB && ReferenceEquals(sa.p, sb.p)) { hasB = false; }
             // ters yönlü tek yönlüler yalnızca kavşaksız kenarlarda çevrilir
             if (!hasA && !hasB && e.GetProperty("reverse").GetBoolean()) pts.Reverse();
-            var mid = pts.Where(p => (!hasA || Vector3.Distance(p, sa.center) > R) && (!hasB || Vector3.Distance(p, sb.center) > R)).ToList();
+            var mid = pts.Where(p => (!hasA || Vector3.Distance(p, sa.center) > sa.radius) && (!hasB || Vector3.Distance(p, sb.center) > sb.radius)).ToList();
             var seq = new List<Vector3>();
             if (hasA) seq.Add(sa.nodePos);
             foreach (var p in mid) if (seq.Count == 0 || Vector3.Distance(seq[^1], p) > 3f) seq.Add(p);
@@ -322,6 +332,7 @@ internal static class Program
         var name = cfg.GetProperty("output_map_name").GetString();
         if (name == "saklaz" || name == "europe") throw new InvalidOperationException("Korumalı ad.");
         map.Save(outDir, name, true);
+        Console.WriteLine("Prefab dağılımı: " + string.Join(", ", byToken.Select(kv => $"{kv.Key}={kv.Value}")));
         Console.WriteLine($"Kaydedildi: {name}.mbd  kavşak={placed} (reddedilen {rejected})  yol={roads} segment={segs} bağlantı={connected} atlanan={skipped} bina={buildings}");
         return 0;
     }

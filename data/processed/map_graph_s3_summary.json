@@ -1,7 +1,7 @@
 {
   "scale": 3.0,
-  "edges": 10546,
-  "segments": 16385,
+  "edges": 10585,
+  "segments": 16405,
   "graph_nodes": 15319,
   "degree_hist": {
     "1": 775,
@@ -11,8 +11,8 @@
     "5": 65,
     "6": 11
   },
-  "junction_candidates_city": 509,
-  "junctions_chosen": 385,
-  "junctions_T": 345,
+  "junction_candidates_city": 586,
+  "junctions_chosen": 436,
+  "junctions_T": 396,
   "junctions_X": 40
 }

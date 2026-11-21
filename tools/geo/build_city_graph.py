@@ -38,6 +38,10 @@ ROADMAP = {
     "living_street": ("r1_city_narrow", 8), "road": ("r1_city_narrow", 8), "service": ("service", 9),
 }
 CITY = {"r1_city", "r1_city_narrow"}
+R2 = {"r2_divided"}
+cls = lambda t: "r2" if t in R2 else ("r1" if t in CITY else None)
+# izin verilen (r1 sayısı, r2 sayısı) desenleri -> prefab var
+PATTERNS = {(3, 0), (2, 1), (1, 2), (0, 3), (4, 0), (0, 4)}
 
 
 def main() -> None:
@@ -137,7 +141,8 @@ def main() -> None:
     for k, lst in inc.items():
         if len(lst) not in (3, 4):
             continue
-        if any(ed["type"] not in CITY for ed, _ in lst):
+        cl = [cls(ed["type"]) for ed, _ in lst]
+        if None in cl or (cl.count("r1"), cl.count("r2")) not in PATTERNS:
             continue
         if any(ed["a"] == ed["b"] for ed, _ in lst):
             continue
@@ -154,13 +159,14 @@ def main() -> None:
         if any(math.dist(c, q) < G for dx in (-1, 0, 1) for dz in (-1, 0, 1) for q in grid[(key[0] + dx, key[1] + dz)]):
             continue
         # aynı kenarın iki ucunda prefab: kenar 2*yarıçap + pay kadar uzun olmalı
-        if any(used_edges[ed["id"]] and ed["len"] < 2 * a.prefab_radius + 8 for ed, _ in lst):
+        rad = 23.25 if any(cls(ed["type"]) == "r2" for ed, _ in lst) else a.prefab_radius
+        if any(used_edges[ed["id"]] and ed["len"] < 2 * rad + 8 for ed, _ in lst):
             continue
         grid[key].append(c)
         for ed, _ in lst:
             used_edges[ed["id"]] += 1
         chosen.append({"id": len(chosen), "node": k, "x": c[0], "z": c[1], "arms":
-                       [{"edge": ed["id"], "end": end, "dir": arm_dir(ed, end)} for ed, end in lst]})
+                       [{"edge": ed["id"], "end": end, "cls": cls(ed["type"]), "dir": arm_dir(ed, end)} for ed, end in lst]})
 
     # 4) Prefab konmayan kesişimlerde parçaları aynı OSM yolu boyunca yeniden birleştir
     #    (editör öğe sayısı sınırı: ~17 bin öğe üstünde render taşması).

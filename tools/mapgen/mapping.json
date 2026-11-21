@@ -4,9 +4,9 @@
   "output_map_dir": "D:\\SAKLAZ_DEV\\Euro Truck Simulator 2\\mod\\user_map\\map",
   "output_map_name": "saklaz_city",
   "road_types": {
-    "_doc": "ger14 = ger hw 3 lanes 2m offset tmpl; ger11 = ger hw 2 lanes 2m offset tmpl; ger5 = ger road 1 one way; ger1 = ger road 1 tmpl",
+    "_doc": "ger14 = ger hw 3 lanes 2m offset tmpl (D-100/TEM); ger7 = ger road 2 city narrow tmpl (ana caddeler, r2 kavşak prefablarıyla uyumlu); ger5 = ger road 1 one way (rampa); ger1 = ger road 1 tmpl (r1)",
     "hw3_divided": "ger14",
-    "r2_divided": "ger11",
+    "r2_divided": "ger7",
     "ramp_1lane": "ger5",
     "r1_city": "ger1",
     "r1_city_narrow": "ger1",
@@ -22,9 +22,15 @@
     "commercial": "0700b|var1,var2|default"
   },
   "junctions": {
-    "_doc": "prefabinfo ile doğrulandı: düğümler merkezden 18 m, look ger_1..ger_5, variant clean",
-    "3": { "token": "mod_ger_67", "ppd": "/prefab2/cross_temp/ger/ger_r1_x_r1_t_narrow_tmpl.ppd" },
-    "4": { "token": "mod_ger_63", "ppd": "/prefab2/cross_temp/ger/ger_r1_x_r1_narrow_tmpl.ppd" },
+    "_doc": "prefabinfo ile doğrulandı. classes = .ppd düğüm sırasıyla kolun yol sınıfı (r1 kolu 18 m, r2 kolu 23,25 m).",
+    "prefabs": [
+      { "token": "mod_ger_67", "ppd": "/prefab2/cross_temp/ger/ger_r1_x_r1_t_narrow_tmpl.ppd", "classes": ["r1", "r1", "r1"] },
+      { "token": "mod_ger_63", "ppd": "/prefab2/cross_temp/ger/ger_r1_x_r1_narrow_tmpl.ppd", "classes": ["r1", "r1", "r1", "r1"] },
+      { "token": "mod_ger_75", "ppd": "/prefab2/cross_temp/ger/ger_r2_x_r1_t_narrow_tmpl.ppd", "classes": ["r2", "r1", "r2"] },
+      { "token": "mod_ger_72", "ppd": "/prefab2/cross_temp/ger/ger_r1_x_r2_t_narrow_tmpl.ppd", "classes": ["r1", "r2", "r1"] },
+      { "token": "mod_ger_88", "ppd": "/prefab2/cross_temp/ger/ger_r2_x_r2_t_narrow_tmpl.ppd", "classes": ["r2", "r2", "r2"] },
+      { "token": "mod_ger_53", "ppd": "/prefab2/cross_temp/ger/ger_r2_x_r2_narrow_tmpl.ppd", "classes": ["r2", "r2", "r2", "r2"] }
+    ],
     "look": "ger_1",
     "variant": "clean",
     "max_angle_error_deg": 40
