@@ -20,13 +20,54 @@
     "secondary_link": 42
   },
   "junctions_3plus": 2235,
-  "buildings": 0,
-  "buildings_by_kind_top": [],
+  "buildings": 23917,
+  "buildings_by_kind_top": [
+    [
+      "yes",
+      20778
+    ],
+    [
+      "apartments",
+      1083
+    ],
+    [
+      "industrial",
+      640
+    ],
+    [
+      "house",
+      635
+    ],
+    [
+      "mosque",
+      173
+    ],
+    [
+      "school",
+      114
+    ],
+    [
+      "roof",
+      102
+    ],
+    [
+      "commercial",
+      80
+    ],
+    [
+      "shed",
+      44
+    ],
+    [
+      "university",
+      41
+    ]
+  ],
   "extent_game_m": [
     -2807,
     1840,
     -2805,
     1781
   ],
-  "file_mb": 3.6
+  "file_mb": 7.2
 }
