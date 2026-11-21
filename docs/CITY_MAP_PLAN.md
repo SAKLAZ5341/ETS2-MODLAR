@@ -187,3 +187,26 @@ Hedef: Gebze + Darıca + Dilovası, gerçekçi ve oynanabilir. Sıra:
 - Açık: son oyun logunda (18:10) ≥ 4 depo "Company item without company assignment" (koordinatlardan:
   transinet@gebze, trameri@dilovasi, stokes@dilovasi …). Tanım dosyaları mevcut; neden oyunda
   `g_developer 2` ile tam liste alınarak incelenecek.
+
+## 17. Ana yol kavşakları ve depo şirketleri – 2026-11-21 22:30 (oyun/editör açılmadan)
+
+- **Otoyol şeritleri:** OSM'de D-100/TEM her yön ayrı tek yönlü çizili; önceden her biri çift yönlü bölünmüş
+  `ger14` ile çiziliyordu (üst üste binen ikili yollar). Artık `hw3_oneway` → `ger16` (ger hw 3 lanes one way).
+- **Çıkış/katılma prefabları:** `mapgen ppdnav` ile .ppd navigasyon eğrileri okundu:
+  `mod_ger_31` (ger_hw3_exit_joint_mirrored) = **çıkış** (node0 4 şerit giriş → node1 3 şerit + node2 sağ rampa),
+  `ch_4202j` (ger_hw3_exit_joint_tmpl_v02) = **katılma** (node0 3 şerit + node2 sağ rampa → node1 4 şerit).
+  `build_city_graph.py` 3b: tek yönlü şerit + tek yönlü rampa düğümleri, rampa ~30 m'de sağda (yanal sapma > 1 m),
+  prefabın oturacağı kenar ≥ 50 m, aralık ≥ 70 m → **28 çıkış + 34 katılma = 62 prefab**, hepsi yerleşti.
+- **Depo hatası düzeltmesi (oyunda doğrulanmadı):** "Company item without company assignment" nedeni aynı şirketin
+  farklı türde iki deposu + çakışan şehir alanlarıydı (her şirket-şehir için tek prefab tanımı). Artık her depo
+  harita genelinde benzersiz şirket alıyor; şirket, ana oyunda o prefabı kullananlardan seçiliyor
+  (`mapgen companyprefabs` → `game_defs/company_prefabs.tsv`): stokes, transinet (genel), tradeaux, lkwlog,
+  posped (lojistik), trameri (hafif fabrika). `write_mod_defs.py` tanımı 4 şehrin hepsine yazıyor (24 dosya).
+- Sonuç: 474 şehir kavşağı + 62 otoyol prefabı, 7.016 yol, 12.889 parça, 3.235 bina, 1.690 zemin, 6 depo.
+  Paket: `releases/saklaz_turkiye_map_0.2.0-dev_*_2226.scs`.
+
+### Kullanıcı oyununu bitirince yapılacak testler
+1. Editör (yalnız): `saklaz_city` aç → *Map > Recompute map* → kaydet → kapat (taşma olmamalı; parça 12.889).
+2. Önizleme (editör kapalıyken): `tools/play/play_saklaz.ps1`; logda "Company item without company assignment"
+   olmamalı; D-100 çıkış/katılma prefablarında AI trafiği ve sürüş kontrolü.
+3. Paketi ayrı bir profilde etkinleştirip yeni profil oluştururken harita seçimini doğrula.

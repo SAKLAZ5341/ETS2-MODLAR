@@ -29,9 +29,15 @@ for c in G["cities"]:
         encoding="utf-8")
 (M / "city.saklaz.sii").write_text("SiiNunit\n{\n" + "\n".join(inc) + "\n}\n", encoding="utf-8")
 
+from collections import Counter
+dup = [c for c, n in Counter(d["company"] for d in G["depots"]).items() if n > 1]
+if dup:
+    raise SystemExit(f"HATA: aynı şirket birden çok depoda: {dup} (build_city_graph.py assign_cities)")
 for d in G["depots"]:
     x, z = d["body"]
-    cities = {c["token"] for c in G["cities"] if c["x0"] <= x <= c["x1"] and c["z0"] <= z <= c["z1"]} | {d["city"]}
+    # Şirketler harita genelinde benzersiz olduğu için tanım TÜM şehirlere yazılır: CityArea boyutu
+    # (tam/yarım ölçü) nasıl yorumlanırsa yorumlansın depo hangi şehre düşerse tanım bulunur.
+    cities = {c["token"] for c in G["cities"]} | {d["city"]}
     for t in sorted(cities):
         f = M / "company" / d["company"] / "editor" / f"{t}.sii"
         f.parent.mkdir(parents=True, exist_ok=True)

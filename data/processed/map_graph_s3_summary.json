@@ -1,7 +1,7 @@
 {
-  "scale": 3,
-  "edges": 7763,
-  "segments": 14052,
+  "scale": 3.0,
+  "edges": 7799,
+  "segments": 14070,
   "graph_nodes": 18079,
   "degree_hist": {
     "1": 1052,
@@ -17,9 +17,11 @@
   "junctions_X": 57,
   "depots": 6,
   "depot_companies": {
-    "stokes": 2,
+    "stokes": 1,
+    "tradeaux": 1,
     "trameri": 1,
-    "transinet": 2,
-    "tradeaux": 1
+    "transinet": 1,
+    "lkwlog": 1,
+    "posped": 1
   }
 }

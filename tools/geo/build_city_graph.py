@@ -53,6 +53,8 @@ def main() -> None:
     ap.add_argument("--prefab-radius", type=float, default=18.0, help="prefab merkez-düğüm mesafesi (oyun m)")
     ap.add_argument("--min-arm", type=float, default=24.0, help="kol başına en az kenar uzunluğu (oyun m)")
     ap.add_argument("--min-junction-gap", type=float, default=55.0)
+    ap.add_argument("--min-hw-gap", type=float, default=70.0, help="otoyol çıkış/katılma prefabları arası en az (oyun m)")
+    ap.add_argument("--hw-prefab-len", type=float, default=40.0, help="otoyol çıkış/katılma prefab uzunluğu (oyun m)")
     ap.add_argument("--drop-deadend-len", type=float, default=60.0, help="bu uzunluktan kısa çıkmaz ara sokakları at (oyun m; 0=kapalı)")
     a = ap.parse_args()
     S = a.scale
@@ -113,6 +115,8 @@ def main() -> None:
             L = sum(math.dist(p, q) for p, q in zip(out, out[1:]))
             if L < 2.0:
                 continue
+            if kind == "hw3_divided" and t.get("oneway") in ("yes", "1"):
+                kind = "hw3_oneway"  # OSM'de her yön ayrı çizili: tek yönlü otoyol şeridi
             edges.append({"id": len(edges), "osm": wy["id"], "hw": hw, "type": kind, "prio": prio,
                           "name": t.get("name"), "oneway": t.get("oneway") in ("yes", "1", "-1"),
                           "reverse": t.get("oneway") == "-1", "a": nid(seg[0]), "b": nid(seg[-1]),
@@ -169,9 +173,64 @@ def main() -> None:
         chosen.append({"id": len(chosen), "node": k, "x": c[0], "z": c[1], "arms":
                        [{"edge": ed["id"], "end": end, "cls": cls(ed["type"]), "dir": arm_dir(ed, end)} for ed, end in lst]})
 
+    # 3b) Otoyol ayrılma/katılma noktaları (tek yönlü şerit + tek yönlü rampa, sağdan trafik)
+    hwj, hgrid = [], defaultdict(list)
+    HG = a.min_hw_gap
+    why = Counter()
+    for k, lst in inc.items():
+        if len(lst) != 3 or k in {j["node"] for j in chosen}:
+            continue
+        hwl = [(ed, end) for ed, end in lst if ed["type"] == "hw3_oneway" and not ed["reverse"]]
+        rl = [(ed, end) for ed, end in lst if ed["type"] == "ramp_1lane" and ed["oneway"] and not ed["reverse"]]
+        if len(hwl) != 2 or len(rl) != 1 or any(ed["a"] == ed["b"] for ed, _ in lst):
+            continue
+        hin = [x for x in hwl if x[1] == "b"]
+        hout = [x for x in hwl if x[1] == "a"]
+        if len(hin) != 1 or len(hout) != 1:
+            why["yön (giren/çıkan şerit yok)"] += 1
+            continue
+        (ein, _), (eout, _), (er, rend) = hin[0], hout[0], rl[0]
+        kind = "exit" if rend == "a" else "merge"
+        di, do, dr = arm_dir(ein, "b"), arm_dir(eout, "a"), arm_dir(er, rend)
+        tx, tz = do[0] - di[0], do[1] - di[1]
+        tl = math.hypot(tx, tz)
+        if tl < 1e-6:
+            continue
+        tx, tz = tx / tl, tz / tl
+        # rampanın ~30 m ilerideki noktasının şeride göre yanal sapması (sağ = (-tz, tx); +Z güney)
+        rp = er["pts"] if rend == "a" else er["pts"][::-1]
+        acc, far = 0.0, rp[-1]
+        for p_, q_ in zip(rp, rp[1:]):
+            acc += math.dist(p_, q_)
+            if acc >= 30:
+                far = q_
+                break
+        lat = (far[0] - rp[0][0]) * (-tz) + (far[1] - rp[0][1]) * tx
+        if lat <= 1.0:  # rampa sağda değil
+            why["rampa solda/düz"] += 1
+            continue
+        # prefab (40 m) çıkışta gelen şeridin, katılmada giden şeridin üstüne oturur
+        long_e, short_e = (ein, eout) if kind == "exit" else (eout, ein)
+        if long_e["len"] < a.hw_prefab_len + 10 or short_e["len"] < 12 or er["len"] < 30:
+            why[f"kısa kenar ({'uzun' if long_e['len'] < a.hw_prefab_len + 10 else 'kısa/rampa'})"] += 1
+            continue
+        c = ein["pts"][-1]
+        key = (int(c[0] // HG), int(c[1] // HG))
+        if any(math.dist(c, q) < HG for dx in (-1, 0, 1) for dz in (-1, 0, 1) for q in hgrid[(key[0] + dx, key[1] + dz)]):
+            why["başka prefaba yakın"] += 1
+            continue
+        hgrid[key].append(c)
+        hwj.append({"id": len(hwj), "node": k, "x": c[0], "z": c[1], "kind": kind,
+                    "travel": [round(tx, 4), round(tz, 4)],
+                    "arms": [{"edge": ein["id"], "end": "b", "role": "in"},
+                             {"edge": eout["id"], "end": "a", "role": "out"},
+                             {"edge": er["id"], "end": rend, "role": "ramp"}]})
+    print(f"otoyol ayrılma/katılma: {sum(1 for h in hwj if h['kind'] == 'exit')} çıkış, "
+          f"{sum(1 for h in hwj if h['kind'] == 'merge')} katılma; elenen: {dict(why)}")
+
     # 4) Prefab konmayan kesişimlerde parçaları aynı OSM yolu boyunca yeniden birleştir
     #    (editör öğe sayısı sınırı: ~17 bin öğe üstünde render taşması).
-    jnodes = {j["node"] for j in chosen}
+    jnodes = {j["node"] for j in chosen} | {h["node"] for h in hwj}
     remap, merged = {}, []
     cur = None
     for ed in edges:  # aynı yolun parçaları ardışık üretildi
@@ -189,7 +248,7 @@ def main() -> None:
             remap[(ed["id"], "b")] = cur
     for i, m in enumerate(merged):
         m["id"] = i
-    for j in chosen:
+    for j in chosen + hwj:
         for arm in j["arms"]:
             m = remap[(arm["edge"], arm["end"])]
             arm["edge"] = m["id"]
@@ -214,11 +273,11 @@ def main() -> None:
         for ed in edges:
             deg[ed["a"]] += 1
             deg[ed["b"]] += 1
-        armed = {arm["edge"] for j in chosen for arm in j["arms"]}
+        armed = {arm["edge"] for j in chosen + hwj for arm in j["arms"]}
         keep = [ed for ed in edges if not (ed["type"] in ("r1_city_narrow", "service") and ed["id"] not in armed
                                             and (deg[ed["a"]] == 1 or deg[ed["b"]] == 1) and ed["len"] < a.drop_deadend_len)]
         idmap = {ed["id"]: i for i, ed in enumerate(keep)}
-        for j in chosen:
+        for j in chosen + hwj:
             for arm in j["arms"]:
                 arm["edge"] = idmap[arm["edge"]]
         for i, ed in enumerate(keep):
@@ -233,7 +292,7 @@ def main() -> None:
 
     out = {"meta": {"scale_divisor": S, "origin_osm_node": 26505108, "axes": "+X doğu, +Z güney, Y=0",
                     "prefab_radius": a.prefab_radius, "attribution": "(c) OpenStreetMap contributors, ODbL 1.0"},
-           "edges": edges, "junctions": chosen, "depots": depots, "cities": cities}
+           "edges": edges, "junctions": chosen, "hw_junctions": hwj, "depots": depots, "cities": cities}
     dst = ROOT / "data" / "processed" / f"map_graph_s{S:g}.json"
     dst.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
     deg = Counter(len(v) for v in inc.values())
@@ -280,13 +339,19 @@ def assign_cities(depots, edges, S):
     for d in depots:
         pt = Point(d["body"])
         d["city"] = next((t for t, (_, poly) in polys.items() if poly.contains(pt)), "gebze")
-    # Oyunda doğrulanan şirketler (lkwlog/posped "assignment" hatası veriyor). Bir şehirde her şirket en fazla bir kez.
-    pool = ["stokes", "tradeaux", "trameri", "transinet"]
-    used = defaultdict(set)
+    # Her depo harita genelinde BENZERSİZ bir şirket alır; şirket o depo türünün prefabını ana oyunda da
+    # kullanıyor olmalı (def.scs /def/company/*/editor taraması: data/processed/game_defs/company_prefabs.tsv).
+    # Neden: oyunda her (şirket, şehir) için tek company_def/prefab var; şehir alanları çakışınca aynı şirketin
+    # farklı türde iki deposu "Company item without company assignment" hatası veriyordu.
+    pools = {"generic": ["stokes", "transinet", "posped"],
+             "logistic": ["tradeaux", "lkwlog", "posped", "eurogoodies"],
+             "light_factory": ["trameri", "kathode"]}
+    used = set()
     for d in depots:
-        if d["company"] not in pool or d["company"] in used[d["city"]]:
-            d["company"] = next((c for c in pool if c not in used[d["city"]]), d["company"])
-        used[d["city"]].add(d["company"])
+        free = [c for c in pools.get(d["kind"], []) if c not in used]
+        if free:
+            d["company"] = free[0]
+        used.add(d["company"])
     return cities
 
 

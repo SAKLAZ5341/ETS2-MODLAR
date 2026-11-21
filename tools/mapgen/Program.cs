@@ -35,6 +35,8 @@ internal static class Program
             "reflect" => Reflect(args.Skip(1).ToArray()),
             "modelinfo" => ModelInfo(cfg, args.Skip(1).SelectMany(a => a.StartsWith("@") ? File.ReadAllLines(a[1..]) : new[] { a }).Where(s => s.Length > 0).ToArray()),
             "prefabinfo" => PrefabInfo(cfg, args.Skip(1).ToArray()),
+            "ppdnav" => PpdNav(cfg, args.Skip(1).ToArray()),
+            "companyprefabs" => CompanyPrefabs(cfg),
             "buildgraph" => BuildGraph(cfg, args.Length > 1 ? args[1] : "data/processed/map_graph_s3.json",
                                        args.Length > 2 ? args[2] : "data/processed/map_export_s3.json"),
             _ => 2,
@@ -131,6 +133,75 @@ internal static class Program
         foreach (var k in packs) k.fs.Dispose();
         return 0;
     }
+
+    // ---------------------------------------------------------------- companyprefabs
+    // def.scs + dlc'siz: her şirketin editor/*.sii dosyalarındaki prefab tokenlarını sayar (salt okunur).
+    static int CompanyPrefabs(JsonElement cfg)
+    {
+        var gameRoot = cfg.GetProperty("game_root").GetString();
+        using var fs = HashFsReader.Open(Path.Combine(gameRoot, "def.scs"));
+        var rows = new List<string>();
+        foreach (var c in fs.GetDirectoryListing("/def/company").Subdirectories)
+        {
+            var ed = c.TrimEnd('/') + "/editor";
+            if (!fs.DirectoryExists(ed)) continue;
+            var cnt = new Dictionary<string, int>();
+            foreach (var f in fs.GetDirectoryListing(ed).Files)
+            {
+                var txt = Encoding.UTF8.GetString(fs.Extract(f)[0]);
+                foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(txt, @"prefab:\s*([A-Za-z0-9_\.]+)"))
+                    cnt[m.Groups[1].Value] = cnt.GetValueOrDefault(m.Groups[1].Value) + 1;
+            }
+            var name = c.TrimEnd('/').Split('/').Last();
+            foreach (var kv in cnt) rows.Add($"{name}\t{kv.Key}\t{kv.Value}");
+        }
+        var outp = Path.Combine(Root, "data", "processed", "game_defs", "company_prefabs.tsv");
+        File.WriteAllLines(outp, rows);
+        Console.WriteLine($"{rows.Count} satır -> {outp}");
+        return 0;
+    }
+
+    // ---------------------------------------------------------------- ppdnav
+    // .ppd düğümlerini ve navigasyon eğrilerini (başlangıç/bitiş konumu) yazdırır: akış yönünü bulmak için.
+    static int PpdNav(JsonElement cfg, string[] ppds)
+    {
+        var gameRoot = cfg.GetProperty("game_root").GetString();
+        using var fs = HashFsReader.Open(Path.Combine(gameRoot, "base.scs"));
+        foreach (var p in ppds)
+        {
+            var d = TruckLib.Models.Ppd.PrefabDescriptor.Open(p, fs);
+            Console.WriteLine($"== {p}");
+            for (int i = 0; i < d.Nodes.Count; i++)
+            {
+                var n = d.Nodes[i];
+                Console.WriteLine($"  node{i} pos={n.Position} dir={n.Direction} " +
+                    string.Join(" ", n.GetType().GetProperties().Where(pr => pr.Name.Contains("Lane") || pr.Name.Contains("Curve"))
+                        .Select(pr => $"{pr.Name}={Fmt(pr.GetValue(n))}")));
+            }
+            var navProp = d.GetType().GetProperties().FirstOrDefault(pr => pr.Name.Contains("Nav"));
+            if (navProp?.GetValue(d) is System.Collections.IEnumerable curves)
+            {
+                int k = 0;
+                foreach (var c in curves)
+                {
+                    var t = c.GetType();
+                    string F(string name) => t.GetProperty(name) is { } pi ? Fmt(pi.GetValue(c)) : "-";
+                    Console.WriteLine($"  nav{k++} start={F("StartPosition")} end={F("EndPosition")} next={F("NextLines")} prev={F("PreviousLines")}");
+                }
+                if (k == 0) Console.WriteLine($"  ({navProp.Name} boş) özellikler: {string.Join(",", curves.GetType().GetProperties().Select(x => x.Name))}");
+            }
+            else Console.WriteLine("  özellikler: " + string.Join(",", d.GetType().GetProperties().Select(x => x.Name)));
+        }
+        return 0;
+    }
+
+    static string Fmt(object o) => o switch
+    {
+        null => "null",
+        string s => s,
+        System.Collections.IEnumerable e => "[" + string.Join(",", e.Cast<object>().Take(8)) + "]",
+        _ => o.ToString(),
+    };
 
     // ---------------------------------------------------------------- prefabinfo
     // .ppd düğümlerini (konum, yön) ve prefab modelinin look/variant adlarını yazdırır.
@@ -324,6 +395,60 @@ internal static class Program
         }
 
         // 1b) şirket depoları (iki düğümlü prefab, yol ikiye bölünmüş) + Company öğeleri
+        // 1b) Otoyol çıkış / katılma prefabları (ppdnav ile akış yönü doğrulandı: node0 giriş, node1 ana çıkış,
+        //     node2 rampa; rampa sağda). anchor = OSM ayrılma/katılma düğümüne oturan prefab düğümü.
+        int hwPlaced = 0, hwRejected = 0;
+        if (cfg.TryGetProperty("hw_junctions", out var hcfg) && graph.TryGetProperty("hw_junctions", out var hlist))
+        {
+            var hspec = new Dictionary<string, (string token, TruckLib.Models.Ppd.PrefabDescriptor ppd, int anchor, string look, string variant)>();
+            foreach (var kind in new[] { "exit", "merge" })
+            {
+                var h = hcfg.GetProperty(kind);
+                hspec[kind] = (h.GetProperty("token").GetString(),
+                               TruckLib.Models.Ppd.PrefabDescriptor.Open(h.GetProperty("ppd").GetString(), fs),
+                               h.GetProperty("anchor").GetInt32(), h.GetProperty("look").GetString(), h.GetProperty("variant").GetString());
+            }
+            foreach (var hj in hlist.EnumerateArray())
+            {
+                try
+                {
+                    var sp = hspec[hj.GetProperty("kind").GetString()];
+                    var np = sp.ppd.Nodes.Select(n => n.Position).ToList();
+                    var J = V(hj.GetProperty("x").GetDouble(), hj.GetProperty("z").GetDouble());
+                    var travel = Vector2.Normalize(new Vector2((float)hj.GetProperty("travel")[0].GetDouble(), (float)hj.GetProperty("travel")[1].GetDouble()));
+                    var localT = Vector2.Normalize(new Vector2(np[1].X - np[0].X, np[1].Z - np[0].Z));
+                    int bestYaw = 0; float bestDot = -2;
+                    for (int yd = 0; yd < 360; yd++)
+                    {
+                        var v = Vector3.Transform(new Vector3(localT.X, 0, localT.Y), Quaternion.CreateFromYawPitchRoll(yd * MathF.PI / 180f, 0, 0));
+                        float dot = Vector2.Dot(new Vector2(v.X, v.Z), travel);
+                        if (dot > bestDot) { bestDot = dot; bestYaw = yd; }
+                    }
+                    var q = Quaternion.CreateFromYawPitchRoll(bestYaw * MathF.PI / 180f, 0, 0);
+                    var origin = J - Vector3.Transform(np[sp.anchor], q);
+                    var w = np.Select(p => origin + Vector3.Transform(p, q)).ToList();
+                    // rampa düğümü şeride göre sağda mı? (sağ = (-tz, tx), +Z güney)
+                    var right = new Vector2(-travel.Y, travel.X);
+                    var mid01 = (w[0] + w[1]) / 2;
+                    float side = Vector2.Dot(new Vector2(w[2].X - mid01.X, w[2].Z - mid01.Z), right);
+                    if (side <= 0) { hwRejected++; continue; }
+                    var pf = Prefab.Add(map, w[0], sp.token, sp.ppd, q);
+                    pf.Look = sp.look;
+                    pf.Variant = sp.variant;
+                    var mid = (w[0] + w[1]) / 2;
+                    foreach (var arm in hj.GetProperty("arms").EnumerateArray())
+                    {
+                        int ni = arm.GetProperty("role").GetString() switch { "in" => 0, "out" => 1, _ => 2 };
+                        var actual = pf.Nodes.OrderBy(n => Vector3.DistanceSquared(n.Position, w[ni])).First().Position;
+                        attach[(arm.GetProperty("edge").GetInt32(), arm.GetProperty("end").GetString())] = (pf, actual, mid, 26f);
+                    }
+                    hwPlaced++;
+                }
+                catch (Exception ex) { hwRejected++; if (hwRejected < 10) Console.WriteLine($"otoyol kavşağı {hj.GetProperty("id")}: {ex.Message}"); }
+            }
+            Console.WriteLine($"otoyol çıkış/katılma prefabı: {hwPlaced} (reddedilen {hwRejected})");
+        }
+
         int depots = 0;
         if (cfg.TryGetProperty("depots", out var dcfg) && graph.TryGetProperty("depots", out var dlist))
         {
