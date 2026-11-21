@@ -28,7 +28,7 @@ _sys.stdout.reconfigure(encoding="utf-8")
 import networkx as nx
 from pyproj import Transformer
 from shapely.geometry import LineString, Point
-from shapely.ops import linemerge, unary_union
+from shapely.ops import polygonize, unary_union
 
 ROOT = Path(__file__).resolve().parents[2]
 RAW = ROOT / "data" / "raw"
@@ -64,20 +64,28 @@ def place(places, name):
     return c[0]
 
 
-def resample(coords, spacing):
-    """Gerçek geometri üzerinde eşit aralıklı noktalar (uçlar korunur)."""
-    line = LineString(coords)
-    n = max(1, int(math.ceil(line.length / spacing)))
-    return [line.interpolate(i / n, normalized=True).coords[0] for i in range(n + 1)]
+def shape_nodes(coords, max_gap, tol=4.0):
+    """Gerçek geometriyi Douglas-Peucker (tol, gerçek metre) ile sadeleştirir; şekil noktalarını korur,
+    max_gap'ten (gerçek metre) uzun aralıklara eşit ara noktalar ekler."""
+    simp = list(LineString(coords).simplify(tol, preserve_topology=False).coords)
+    out = [simp[0]]
+    for a, b in zip(simp, simp[1:]):
+        d = math.dist(a, b)
+        k = int(math.ceil(d / max_gap))
+        for i in range(1, k + 1):
+            out.append((a[0] + (b[0] - a[0]) * i / k, a[1] + (b[1] - a[1]) * i / k))
+    return out
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--scale", type=float, default=CONFIG["game"]["scale_divisor"])
-    ap.add_argument("--node-spacing", type=float, default=40.0,
-                    help="editör düğüm aralığı, OYUN metresi (varsayılan 40)")
+    ap.add_argument("--node-spacing", type=float, default=20.0,
+                    help="editör düğüm aralığı, OYUN metresi (varsayılan 20)")
     ap.add_argument("--corridor-buffer-m", type=float, default=1500.0)
     args = ap.parse_args()
+    S = args.scale
+    OUT = ROOT / "data" / "processed" / f"prototype_s{S:g}"
     OUT.mkdir(parents=True, exist_ok=True)
     IMG.mkdir(parents=True, exist_ok=True)
     S = args.scale
@@ -122,36 +130,59 @@ def main():
 
     d100_nodes, o4_nodes = ref_nodes("D100"), ref_nodes("O4")
 
-    # ---- P1: D-100 koridoru (Çayırova -> Gebze), yönlere göre
-    corridor = LineString([P["Çayırova"].coords[0], P["Gebze"].coords[0]]).buffer(args.corridor_buffer_m)
-    d100_lines = []
+    # ---- P1: D-100 Çayırova (ilçe batı sınırı) -> Gebze merkez, iki yön ayrı (OSM oneway'e uyarak)
+    # Batı uç: D-100'ün Çayırova ilçe poligonu içindeki en batı düğümü (Tuzla sınırı).
+    dist_rel = [e for e in load("districts") if e.get("tags", {}).get("name") == "Çayırova"]
+    if not dist_rel:
+        raise SystemExit("HATA: Çayırova ilçe sınırı yok")
+    lines = [LineString([TO_UTM.transform(p["lon"], p["lat"]) for p in m["geometry"]])
+             for m in dist_rel[0].get("members", []) if m.get("role") == "outer" and len(m.get("geometry", [])) > 1]
+    cay_poly = unary_union(list(polygonize(unary_union(lines))))
+    d100_in = [n for n in d100_nodes if cay_poly.contains(Point(n))]
+    if not d100_in:
+        raise SystemExit("HATA: D-100 Çayırova ilçesinden geçmiyor (veri sorunu)")
+    A = Point(min(d100_in, key=lambda n: n[0]))
+    B = Point(nearest(P["Gebze"], lambda n: n in d100_nodes)[0])
+
+    DG = nx.DiGraph()
     for wid, (t, pts) in wayinfo.items():
-        if "D100" in norm_ref(t.get("ref")) and t["highway"] in MAIN:
-            ln = LineString(pts)
-            if ln.intersects(corridor):
-                clip = ln.intersection(corridor)
-                if not clip.is_empty:
-                    d100_lines.append((wid, t, clip))
-    merged = linemerge(unary_union([c for _, _, c in d100_lines]))
-    parts = list(merged.geoms) if hasattr(merged, "geoms") else [merged]
-    parts = sorted([p for p in parts if p.length > 300], key=lambda p: -p.length)
+        if "D100" not in norm_ref(t.get("ref")) or t["highway"] not in ("trunk", "primary", "trunk_link"):
+            continue
+        ks = [(round(p[0], 2), round(p[1], 2)) for p in pts]
+        ow = t.get("oneway")
+        for a, b in zip(ks, ks[1:]):
+            d = math.dist(a, b)
+            if ow == "-1":
+                DG.add_edge(b, a, d=d)
+            else:
+                DG.add_edge(a, b, d=d)
+                if ow not in ("yes", "1", "true"):
+                    DG.add_edge(b, a, d=d)
+
+    def near_set(pt, r=800):
+        return [n for n in DG.nodes if math.dist(n, pt.coords[0]) <= r]
 
     rows, segs = [], []
-    axis = LineString([P["Çayırova"].coords[0], P["Gebze"].coords[0]])
-    for i, part in enumerate(parts[:4]):
-        coords = list(part.coords)
-        # yön: başlangıç Çayırova tarafındaysa doğuya (Gebze) gidiş
-        if axis.project(Point(coords[0])) > axis.project(Point(coords[-1])):
-            coords = coords[::-1]
-            direction = "rev"
-        else:
-            direction = "fwd"
-        segs.append({"id": f"P1_D100_{i}", "length_m_real": round(part.length, 1),
-                     "length_m_game": round(part.length / S, 1), "osm_order": direction})
-        for j, (e, n) in enumerate(resample(coords, args.node_spacing * S)):
+    for sid, src, dst, desc in (("P1_D100_dogu", A, B, "D-100 doğu yönü: Çayırova batı sınırı -> Gebze"),
+                                ("P1_D100_bati", B, A, "D-100 batı yönü: Gebze -> Çayırova batı sınırı")):
+        best = None
+        srcs = near_set(src)
+        if srcs:
+            lengths, paths = nx.multi_source_dijkstra(DG, srcs, weight="d")
+            cands = [n for n in near_set(dst) if n in lengths]
+            if cands:
+                tn = min(cands, key=lambda n: lengths[n])
+                best = paths[tn]
+        if not best:
+            segs.append({"id": sid, "ok": False, "desc": desc, "reason": "OSM oneway kurallarıyla kesintisiz yol bulunamadı"})
+            continue
+        L = sum(math.dist(a, b) for a, b in zip(best, best[1:]))
+        segs.append({"id": sid, "ok": True, "desc": desc, "length_m_real": round(L, 1),
+                     "length_m_game": round(L / S, 1)})
+        for j, (e, n) in enumerate(shape_nodes(best, args.node_spacing * S)):
             lon, lat = TO_WGS.transform(e, n)
             x, z = g(e, n)
-            rows.append({"segment": f"P1_D100_{i}", "seq": j, "lat": round(lat, 7), "lon": round(lon, 7),
+            rows.append({"segment": sid, "seq": j, "lat": round(lat, 7), "lon": round(lon, 7),
                          "game_x": x, "game_z": z})
 
     # ---- bağlantı yolları: gerçek en kısa yollar
@@ -176,7 +207,7 @@ def main():
         for a, b in zip(path, path[1:]):
             if not wids or wids[-1] != G[a][b]["way"]:
                 wids.append(G[a][b]["way"])
-        for j, (e, n) in enumerate(resample(path, args.node_spacing * S) if len(path) > 1 else path):
+        for j, (e, n) in enumerate(shape_nodes(path, args.node_spacing * S) if len(path) > 1 else path):
             lon, lat = TO_WGS.transform(e, n)
             x, z = g(e, n)
             rows.append({"segment": name, "seq": j, "lat": round(lat, 7), "lon": round(lon, 7),
@@ -262,9 +293,9 @@ def main():
     ax.legend(loc="lower left", fontsize=8)
     ax.set_title(f"SAKLAZ 0.1.0 prototip koridoru - ölçek 1:{S:g} - © OpenStreetMap katkıda bulunanlar (ODbL)")
     fig.tight_layout()
-    fig.savefig(IMG / "prototype_corridor.png")
+    fig.savefig(IMG / f"prototype_corridor_s{S:g}.png")
     plt.close(fig)
-    print("Görsel:", IMG / "prototype_corridor.png")
+    print("Görsel:", IMG / f"prototype_corridor_s{S:g}.png")
 
 
 if __name__ == "__main__":

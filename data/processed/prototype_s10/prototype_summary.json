@@ -1,0 +1,217 @@
+{
+  "scale_divisor": 10.0,
+  "node_spacing_game_m": 20.0,
+  "origin": {
+    "osm_node": 26505108,
+    "lat": 40.8006696,
+    "lon": 29.431767,
+    "game": [
+      0.0,
+      -0.0
+    ]
+  },
+  "anchors": {
+    "Gebze": {
+      "osm_node": 26505108,
+      "lat": 40.8006696,
+      "lon": 29.431767,
+      "game": [
+        0.0,
+        -0.0
+      ]
+    },
+    "Çayırova": {
+      "osm_node": 941458046,
+      "lat": 40.8336901,
+      "lon": 29.381513,
+      "game": [
+        -433.94,
+        -354.95
+      ]
+    },
+    "Darıca": {
+      "osm_node": 251382196,
+      "lat": 40.7574799,
+      "lon": 29.3840563,
+      "game": [
+        -389.47,
+        490.55
+      ]
+    }
+  },
+  "P1_D100_segments": [
+    {
+      "id": "P1_D100_dogu",
+      "ok": true,
+      "desc": "D-100 doğu yönü: Çayırova batı sınırı -> Gebze",
+      "length_m_real": 6354.7,
+      "length_m_game": 635.5
+    },
+    {
+      "id": "P1_D100_bati",
+      "ok": true,
+      "desc": "D-100 batı yönü: Gebze -> Çayırova batı sınırı",
+      "length_m_real": 6240.9,
+      "length_m_game": 624.1
+    }
+  ],
+  "routes": [
+    {
+      "id": "P2_D100_TEM",
+      "ok": true,
+      "desc": "Gebze D-100 -> en yakın TEM (O-4) bağlantısı",
+      "start_snap_m": 0.0,
+      "length_m_real": 3985.3,
+      "length_m_game": 398.5,
+      "by_class_m": {
+        "trunk": 2820,
+        "motorway_link": 1165
+      },
+      "osm_ways": [
+        987679846,
+        733907849,
+        225563630,
+        1573467038,
+        42556481,
+        1573467039,
+        1074205720,
+        160636005,
+        1155202088,
+        1250254261,
+        40629016
+      ],
+      "road_names": [
+        "Kocaeli - İstanbul Yolu",
+        "D100",
+        "Kocaeli - İstanbul Yolu",
+        "Gebze 1 Kavşağı",
+        "Gebze Kavşağı"
+      ]
+    },
+    {
+      "id": "P3_Darica_D100",
+      "ok": true,
+      "desc": "Darıca merkez -> D-100",
+      "start_snap_m": 30.7,
+      "length_m_real": 5031.3,
+      "length_m_game": 503.1,
+      "by_class_m": {
+        "residential": 138,
+        "secondary": 489,
+        "primary": 4171,
+        "primary_link": 234
+      },
+      "osm_ways": [
+        217291059,
+        172362089,
+        214918067,
+        1374784390,
+        172258175,
+        1423620725,
+        172258173,
+        692434386,
+        692434389,
+        692434393,
+        388401607,
+        388401743,
+        388401608,
+        692697800,
+        1374784377,
+        1092590900,
+        1092590898,
+        372682558,
+        372682577,
+        1158917488,
+        692697801,
+        229348565,
+        165929378,
+        1507433832,
+        1394930126,
+        1507433833,
+        229348570,
+        165929360
+      ],
+      "road_names": [
+        "residential",
+        "Tuzla Caddesi",
+        "Aliarıcan Caddesi",
+        "İstasyon Caddesi",
+        "primary",
+        "Eskihisar Feribot Yolu"
+      ]
+    },
+    {
+      "id": "P4_Gebze_D100",
+      "ok": true,
+      "desc": "Gebze merkez -> D-100",
+      "start_snap_m": 6.8,
+      "length_m_real": 1114.1,
+      "length_m_game": 111.4,
+      "by_class_m": {
+        "residential": 677,
+        "secondary": 73,
+        "primary": 227,
+        "trunk_link": 138
+      },
+      "osm_ways": [
+        217508675,
+        229464245,
+        157511652,
+        229464207,
+        156673220,
+        1383071527,
+        822688564,
+        1573467036
+      ],
+      "road_names": [
+        "Zübeyde Hanım Caddesi",
+        "residential",
+        "Hükümet Caddesi",
+        "residential",
+        "Adliye Caddesi",
+        "primary",
+        "trunk_link"
+      ]
+    },
+    {
+      "id": "P5_Cayirova_TEM",
+      "ok": true,
+      "desc": "Çayırova merkez -> TEM (O-4)",
+      "start_snap_m": 18.6,
+      "length_m_real": 5985.6,
+      "length_m_game": 598.6,
+      "by_class_m": {
+        "residential": 124,
+        "secondary": 462,
+        "primary": 919,
+        "motorway_link": 1034,
+        "motorway": 3446
+      },
+      "osm_ways": [
+        228396483,
+        1105131261,
+        1105131254,
+        1105131253,
+        723979689,
+        724009652,
+        724009650,
+        1104970521,
+        475608400,
+        602221429,
+        601327679,
+        1344791575,
+        1188679857,
+        601327677
+      ],
+      "road_names": [
+        "residential",
+        "Adnan Kahveci Caddesi",
+        "primary",
+        "Muammer Aksoy Caddesi",
+        "Şekerpınar-Çayırova Bağlantısı",
+        "Şekerpınar Kavşağı"
+      ]
+    }
+  ],
+  "editor_node_count": 229
+}

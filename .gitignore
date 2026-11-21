@@ -10,3 +10,5 @@ __pycache__/
 .venv/
 # Paketler
 releases/*.scs
+# Büyük, yeniden üretilebilir türetilmiş dosyalar
+data/roads/roads_all.geojson
