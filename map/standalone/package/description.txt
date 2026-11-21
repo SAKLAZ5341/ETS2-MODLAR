@@ -1,0 +1,6 @@
+SAKLAZ Türkiye Map - 0.1.0 geliştirme prototipi
+Gebze - Darıca - Çayırova, D-100 ve TEM (O-4) bağlantıları.
+Oynanabilir değildir; yalnızca test içindir.
+
+Harita verisi: © OpenStreetMap katkıda bulunanlar (ODbL 1.0)
+https://www.openstreetmap.org/copyright

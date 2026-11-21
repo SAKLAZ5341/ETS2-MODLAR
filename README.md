@@ -2,7 +2,7 @@
 
 Euro Truck Simulator 2 için gerçek coğrafyaya dayalı Türkiye haritası.
 
-- Hedef oyun: ETS 2 (Steam, güncel kararlı sürüm)
+- Hedef oyun: ETS 2 1.62.3.3 (Steam)
 - Sürüm: 0.1.0 (geliştirme aşamasında, oynanabilir değil)
 - İlk bölge: Gebze – Darıca – Çayırova
 
@@ -10,9 +10,9 @@ Euro Truck Simulator 2 için gerçek coğrafyaya dayalı Türkiye haritası.
 
 | Aşama | Konu | Durum |
 |---|---|---|
-| A | Ortam analizi | Devam ediyor – ortam raporu bekleniyor |
-| B | Coğrafi veri | Başlamadı |
-| C | Harita altyapısı | Başlamadı |
+| A | Ortam analizi | Tamamlandı (docs/TECHNICAL_REVIEW_20261121.md) |
+| B | Coğrafi veri | Tamamlandı – OSM verisi, yol ağı, prototip koridoru |
+| C | Harita altyapısı | Bekliyor – editörde `saklaz` haritası elle oluşturulacak |
 | D | İlk yollar | Başlamadı |
 | E | İlk yerleşim | Başlamadı |
 | F | Test ve paketleme | Başlamadı |
@@ -41,3 +41,17 @@ dokümantasyondan doğrulandıktan sonra Aşama C'de eklenecek.
 
 Coğrafi veri kaynakları ve lisansları `docs/GEO_DATA_SOURCES.md` dosyasında
 tutulur. OpenStreetMap verisi ODbL lisanslıdır ve atıf gerektirir.
+
+## Coğrafi veri araçları
+
+```powershell
+.\.venv\Scripts\python.exe -I tools\geoetch_osm.py          # OSM indir (data/raw)
+.\.venv\Scripts\python.exe -I tools\geouild_network.py      # yol ağı, kavşak, sanayi
+.\.venv\Scripts\python.exe -I tools\geouild_prototype.py --scale 19
+.\.venv\Scripts\python.exe -I tools\geo\export_editor_tables.py --scale 19
+.\.venv\Scripts\python.exe -I testsun_tests.py
+```
+
+Editör adımları: `docs/EDITOR_GUIDE.md`. Son durum: `docs/OVERNIGHT_REPORT_20261121.md`.
+
+Harita verisi © OpenStreetMap katkıda bulunanlar (ODbL 1.0).
