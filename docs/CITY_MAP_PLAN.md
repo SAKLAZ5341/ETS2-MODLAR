@@ -103,3 +103,15 @@ ile programatik üretim. TruckLib 0.5.3, harita sürümü 907'yi (ETS2 1.59–1.
   Seçilen: kenar 7052 (r1_city), eski konum (964,2; -1522,4).
 - Oyunda tır yol üstünde doğdu ve sürüldü (119 km/s). Görüntü: `docs/img/ingame_spawn_on_road.jpg`.
 - Eksik: arazi yok; yol dışı boşluk ve tır yoldan çıkınca düşüyor.
+
+## 10. Bitmiş harita yol haritası (kullanıcı isteği, 2026-11-21)
+
+Hedef: Gebze + Darıca + Dilovası, gerçekçi ve oynanabilir. Sıra:
+1. **Zemin:** `Terrain` öğeleriyle tüm alana kaba ızgara arazi (StepSize Meters16, az sayıda büyük parça;
+   yol başına arazi render taşmasına yol açıyor). Malzeme/profil tokenı `extract def.scs /def/world` ile bulunacak
+   (Git Bash yol dönüştürmesini önlemek için PowerShell'den çalıştır).
+2. **Ağaçlar:** `TerrainSide.Vegetation` (RoadVegetation From/To, Name, Density) + `VegetationSphere` ile yollardan uzak tutma.
+3. **Dilovası:** `config/aoi.json` core_bbox doğusu 29.50 → ~29.58, OSM yeniden indirme.
+4. **Binalar:** 24.706 OSM binasından daha fazlası (öğe sınırı ~17 bin gözetilerek `Buildings` dizileri).
+5. **Şirketler:** `CityArea` + şirket prefabı + `Company`; mod içinde `def/city` ve `def/company` tanımları.
+6. **Trafik + paket:** `TrafficArea`, sonra oynanabilir .scs mod paketi.

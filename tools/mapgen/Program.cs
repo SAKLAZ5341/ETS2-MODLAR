@@ -30,6 +30,7 @@ internal static class Program
         return args[0] switch
         {
             "list" => ListDefs(cfg),
+            "extract" => Extract(cfg, args.Skip(1).ToArray()),
             "build" => Build(cfg, args.Length > 1 ? args[1] : "data/processed/map_export_s3.json"),
             "reflect" => Reflect(args.Skip(1).ToArray()),
             "modelinfo" => ModelInfo(cfg, args.Skip(1).ToArray()),
@@ -66,10 +67,38 @@ internal static class Program
         return 0;
     }
 
+    // ---------------------------------------------------------------- extract
+    // extract <pack.scs> <yol>...  : dosyayı game_defs'e kopyalar; klasörse içeriğini listeler (salt okunur).
+    static int Extract(JsonElement cfg, string[] a)
+    {
+        var gameRoot = cfg.GetProperty("game_root").GetString();
+        var outDir = Path.Combine(Root, "data", "processed", "game_defs");
+        using var fs = HashFsReader.Open(Path.Combine(gameRoot, a[0]));
+        foreach (var p in a.Skip(1))
+        {
+            if (fs.DirectoryExists(p))
+            {
+                var l = fs.GetDirectoryListing(p);
+                foreach (var d in l.Subdirectories) Console.WriteLine("D " + d);
+                foreach (var x in l.Files) Console.WriteLine("F " + x);
+            }
+            else if (fs.FileExists(p))
+            {
+                var bytes = fs.Extract(p)[0];
+                var name = Path.GetFileNameWithoutExtension(a[0]) + "_" + p.Trim('/').Replace('/', '_');
+                File.WriteAllBytes(Path.Combine(outDir, name), bytes);
+                Console.WriteLine($"{p} -> {name} ({bytes.Length} bayt)");
+            }
+            else Console.WriteLine("yok: " + p);
+        }
+        return 0;
+    }
+
     // ---------------------------------------------------------------- reflect (API keşfi)
     static int Reflect(string[] names)
     {
-        var asm = typeof(TruckLib.Models.Model).Assembly;
+        var asm = names.Length > 0 && names[0].StartsWith("map") ? typeof(TruckLib.ScsMap.Map).Assembly : typeof(TruckLib.Models.Model).Assembly;
+        if (names.Length > 0 && names[0].StartsWith("map")) names = names[0] == "map" ? new[] { "?" } : names.Skip(1).ToArray();
         if (names.Length == 1 && names[0] == "?") { foreach (var t in asm.GetExportedTypes().OrderBy(t => t.FullName)) Console.WriteLine(t.FullName); return 0; }
         foreach (var t in asm.GetExportedTypes().Where(t => names.Length == 0 ? t.Name is "Model" or "Look" or "Variant" or "Part" : names.Contains(t.Name) || names.Contains("*")))
         {
