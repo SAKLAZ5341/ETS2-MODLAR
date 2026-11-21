@@ -31,6 +31,8 @@ internal static class Program
         {
             "list" => ListDefs(cfg),
             "build" => Build(cfg, args.Length > 1 ? args[1] : "data/processed/map_export_s3.json"),
+            "reflect" => Reflect(),
+            "modelinfo" => ModelInfo(cfg, args.Skip(1).ToArray()),
             _ => 2,
         };
     }
@@ -58,6 +60,37 @@ internal static class Program
             }
         }
         Console.WriteLine($"Tanım dosyaları: {outDir} (salt okunur kopya, depoya girmez)");
+        return 0;
+    }
+
+    // ---------------------------------------------------------------- reflect (API keşfi)
+    static int Reflect()
+    {
+        var asm = typeof(TruckLib.Models.Model).Assembly;
+        foreach (var t in asm.GetExportedTypes().Where(t => t.Name is "Model" or "Look" or "Variant" or "Part"))
+        {
+            Console.WriteLine($"== {t.FullName}");
+            foreach (var m in t.GetMembers(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.DeclaredOnly))
+                Console.WriteLine("   " + m);
+        }
+        return 0;
+    }
+
+    // ---------------------------------------------------------------- modelinfo
+    // Model .pmd dosyalarındaki gerçek look/variant adlarını yazdırır (oyun dosyası yalnızca okunur).
+    static int ModelInfo(JsonElement cfg, string[] pmds)
+    {
+        var gameRoot = cfg.GetProperty("game_root").GetString();
+        using var fs = HashFsReader.Open(Path.Combine(gameRoot, "base.scs"));
+        foreach (var p in pmds)
+        {
+            try
+            {
+                var m = TruckLib.Models.Model.Open(p, fs);
+                Console.WriteLine($"{p}: looks=[{string.Join(",", m.Looks.Select(l => l.Name))}] variants=[{string.Join(",", m.Variants.Select(v => v.Name))}]");
+            }
+            catch (Exception ex) { Console.WriteLine($"{p}: HATA {ex.GetType().Name}: {ex.Message}"); }
+        }
         return 0;
     }
 
@@ -111,10 +144,20 @@ internal static class Program
             foreach (var bl in blist.EnumerateArray())
             {
                 if (maxBuildings > 0 && buildings >= maxBuildings) break;
-                var model = PickModel(b, bl);
-                if (string.IsNullOrEmpty(model)) continue;
+                if (bl.TryGetProperty("place", out var pl) && !pl.GetBoolean()) continue;
+                var spec = PickModel(b, bl);
+                if (string.IsNullOrEmpty(spec)) continue;
+                // biçim: "model|variant1,variant2|look1,look2" -> OSM id'ye göre sabit seçim
+                var parts = spec.Split('|');
+                long osm = bl.GetProperty("osm").GetInt64();
+                string Pick(int i, string fallback)
+                {
+                    if (parts.Length <= i || parts[i].Length == 0) return fallback;
+                    var opts = parts[i].Split(',');
+                    return opts[(int)(Math.Abs(osm) % opts.Length)];
+                }
                 var pos = new Vector3((float)bl.GetProperty("x").GetDouble(), 0f, (float)bl.GetProperty("z").GetDouble());
-                var m = Model.Add(map, pos, model, "default", "default");
+                var m = Model.Add(map, pos, parts[0], Pick(1, "default"), Pick(2, "default"));
                 float yaw = (float)(bl.GetProperty("heading_deg").GetDouble() * Math.PI / 180.0);
                 m.Node.Rotation = Quaternion.CreateFromYawPitchRoll(yaw, 0, 0);
                 buildings++;

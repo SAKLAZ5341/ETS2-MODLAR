@@ -1,26 +1,25 @@
 {
   "scale": 3.0,
-  "roads": 12242,
-  "road_nodes": 49349,
-  "road_km_game": 743.7,
+  "roads": 9411,
+  "road_nodes": 26082,
+  "road_km_game": 613.9,
   "by_class": {
     "motorway": 43,
-    "trunk_link": 130,
-    "primary": 496,
-    "trunk": 112,
-    "motorway_link": 78,
-    "residential": 7079,
-    "tertiary": 757,
-    "primary_link": 134,
-    "secondary": 439,
-    "service": 1857,
-    "unclassified": 734,
-    "living_street": 300,
-    "tertiary_link": 41,
-    "secondary_link": 42
+    "primary": 405,
+    "trunk": 104,
+    "motorway_link": 77,
+    "residential": 6804,
+    "tertiary": 645,
+    "primary_link": 97,
+    "secondary": 379,
+    "unclassified": 683,
+    "trunk_link": 117,
+    "tertiary_link": 22,
+    "secondary_link": 35
   },
-  "junctions_3plus": 2235,
+  "junctions_3plus": 1526,
   "buildings": 23917,
+  "buildings_placed": 704,
   "buildings_by_kind_top": [
     [
       "yes",
@@ -69,5 +68,5 @@
     -2805,
     1781
   ],
-  "file_mb": 7.2
+  "file_mb": 6.5
 }

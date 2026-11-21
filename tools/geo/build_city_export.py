@@ -44,6 +44,11 @@ SERVICE_KEEP = {None, "", "alley", "driveway_industrial"}  # park yeri koridorla
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--scale", type=float, default=CFG["game"]["city_scale_divisor"])
+    ap.add_argument("--simplify-m", type=float, default=1.5, help="Douglas-Peucker toleransı (gerçek m)")
+    ap.add_argument("--min-seg", type=float, default=2.0, help="en kısa yol parçası (oyun m)")
+    ap.add_argument("--exclude", nargs="*", default=[], help="dışlanacak OSM highway sınıfları")
+    ap.add_argument("--road-clearance", type=float, default=9.0, help="bina merkezi - yol arası en az oyun m")
+    ap.add_argument("--min-building-gap", type=float, default=22.0, help="bina merkezleri arası en az oyun m")
     a = ap.parse_args()
     S = a.scale
     s, w, n, e = CFG["core_bbox_swne"]
@@ -57,7 +62,7 @@ def main() -> None:
         hw = t.get("highway")
         if hw not in ROADMAP:
             continue
-        if hw == "service" and t.get("service") not in SERVICE_KEEP:
+        if hw in a.exclude or (hw == "service" and t.get("service") not in SERVICE_KEEP):
             continue
         pts = [T.transform(p["lon"], p["lat"]) for p in wy["geometry"]]
         ln = LineString(pts)
@@ -68,11 +73,11 @@ def main() -> None:
         for part in parts:
             if part.length < 6 or part.geom_type != "LineString":
                 continue
-            simp = part.simplify(1.5)
+            simp = part.simplify(a.simplify_m)
             cs = [g(x, y) for x, y in simp.coords]
             out = [cs[0]]
             for c in cs[1:]:
-                if math.dist(out[-1], c) >= 2.0:  # ETS2 en kısa yol parçası ~1,25 m; güvenli eşik
+                if math.dist(out[-1], c) >= a.min_seg:  # ETS2 en kısa yol parçası ~1,25 m
                     out.append(c)
             if len(out) < 2:
                 continue
@@ -114,6 +119,31 @@ def main() -> None:
                               "len": round(max(l1, l2) / S, 2), "wid": round(min(l1, l2) / S, 2),
                               "area_real_m2": round(poly.area)})
 
+    # Gerçek boyutlu modeller 1:S sıkıştırılmış şehre sığmaz: yola yakın ve birbirine yakın binaları ele.
+    placed = []
+    if buildings:
+        from shapely.strtree import STRtree
+        rlines = [LineString(r["pts"]) for r in roads if r["prio"] <= 8]
+        tree = STRtree(rlines)
+        cell = defaultdict(list)
+        CELL = a.min_building_gap
+        for b in sorted(buildings, key=lambda b: -b["area_real_m2"]):
+            p = (b["x"], b["z"])
+            from shapely.geometry import Point as _P
+            pt = _P(p)
+            near = tree.query(pt.buffer(a.road_clearance))
+            if any(rlines[i].distance(pt) < a.road_clearance for i in near):
+                continue
+            k = (int(p[0] // CELL), int(p[1] // CELL))
+            if any(math.dist(p, q) < CELL for dx in (-1, 0, 1) for dz in (-1, 0, 1) for q in cell[(k[0] + dx, k[1] + dz)]):
+                continue
+            cell[k].append(p)
+            placed.append(b)
+    for b in buildings:
+        b["place"] = False
+    for b in placed:
+        b["place"] = True
+
     out = {"meta": {"scale_divisor": S, "origin_osm_node": 26505108, "axes": "+X doğu, +Z güney, Y=0",
                     "core_bbox_swne": CFG["core_bbox_swne"],
                     "attribution": "(c) OpenStreetMap contributors, ODbL 1.0"},
@@ -125,7 +155,8 @@ def main() -> None:
     zs = [p[1] for r in roads for p in r["pts"]]
     summary = {"scale": S, "roads": len(roads), "road_nodes": sum(len(r["pts"]) for r in roads),
                "road_km_game": round(L / 1000, 1), "by_class": dict(cnt), "junctions_3plus": len(junctions),
-               "buildings": len(buildings), "buildings_by_kind_top": bcnt.most_common(10),
+               "buildings": len(buildings), "buildings_placed": sum(1 for b in buildings if b.get("place")),
+               "buildings_by_kind_top": bcnt.most_common(10),
                "extent_game_m": [round(min(xs)), round(max(xs)), round(min(zs)), round(max(zs))],
                "file_mb": round(dst.stat().st_size / 1e6, 1)}
     (ROOT / "data" / "processed" / f"map_export_s{S:g}_summary.json").write_text(

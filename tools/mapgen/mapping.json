@@ -1,24 +1,25 @@
 {
-  "_note": "Yol tipi -> ETS2 road_look birim adı (token). Değerler 'dotnet run -- list' çıktısından doğrulanmalıdır. 'ger1' ve 'ger4' TruckLib örneklerinde kullanılan ana oyun tipleridir.",
+  "_note": "Tokenlar def.scs'ten doğrulandı (data/processed/game_defs, 2026-11-21). Hepsi ana oyun (Almanya seti), DLC gerektirmez.",
   "game_root": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Euro Truck Simulator 2",
   "output_map_dir": "D:\\SAKLAZ_DEV\\Euro Truck Simulator 2\\mod\\user_map\\map",
   "output_map_name": "saklaz_city",
   "road_types": {
-    "hw3_divided": "ger4",
-    "r2_divided": "ger4",
-    "ramp_1lane": "ger1",
+    "_doc": "ger14 = ger hw 3 lanes 2m offset tmpl; ger11 = ger hw 2 lanes 2m offset tmpl; ger5 = ger road 1 one way; ger1 = ger road 1 tmpl",
+    "hw3_divided": "ger14",
+    "r2_divided": "ger11",
+    "ramp_1lane": "ger5",
     "r1_city": "ger1",
     "r1_city_narrow": "ger1",
     "service": "ger1"
   },
-  "terrain_size": { "hw3_divided": 20, "r2_divided": 15, "default": 6 },
+  "terrain_size": { "hw3_divided": 10, "r2_divided": 6, "default": 0 },
   "buildings": {
-    "_note": "Bina yerleşimi: 'model' modunda tek modeller; model birim adları 'list' çıktısındaki /def/world/model*.sii içinden seçilmeli. Boş bırakılırsa bina üretilmez.",
+    "_doc": "Biçim model|variantlar|lookler. Adlar 'modelinfo' ile .pmd'den okundu. 0700b = block of flats 01 de; 3q001 = village close 08 de; 3z001 = warehouse 01 de",
     "mode": "model",
-    "small_house": "",
-    "apartment": "",
-    "industrial": "",
-    "commercial": ""
+    "small_house": "3q001|variant1|default",
+    "apartment": "0700b|var1,var2|default",
+    "industrial": "3z001|variant1,variant2,variant3,variant4|blue,green,yellow,red,light,dark",
+    "commercial": "0700b|var1,var2|default"
   },
   "limits": { "max_roads": 0, "max_buildings": 0 }
 }
