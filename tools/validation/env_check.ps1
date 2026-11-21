@@ -170,7 +170,8 @@ Invoke-Step 'Steam' {
     $vdf = Join-Path $sp 'steamapps\libraryfolders.vdf'
     if (Test-Path -LiteralPath $vdf) {
         foreach ($line in (Get-Content -LiteralPath $vdf)) {
-            if ($line -match '"path"\s+"(.+)"') { $libs += (Join-Path ($Matches[1] -replace '\\\\', '\') 'steamapps') }
+            # Join-Path, PS 5.1'de var olmayan sürücüde (ör. çıkarılmış E:) hata fırlatır; .NET Combine fırlatmaz.
+            if ($line -match '"path"\s+"(.+)"') { $libs += [System.IO.Path]::Combine(($Matches[1] -replace '\\\\', '\'), 'steamapps') }
         }
     } else {
         Add-Line '- libraryfolders.vdf bulunamadı; yalnızca ana Steam kütüphanesi kontrol edildi.'
@@ -186,7 +187,7 @@ Invoke-Step 'Steam' {
 
 Invoke-Step 'ETS2' {
     foreach ($lib in $script:Libraries) {
-        $m = Join-Path $lib "appmanifest_$ETS2_APPID.acf"
+        $m = [System.IO.Path]::Combine($lib, "appmanifest_$ETS2_APPID.acf")
         if (Test-Path -LiteralPath $m) {
             $script:Manifest = $m
             $mi = Select-String -LiteralPath $m -Pattern '"installdir"\s+"(.+)"' | Select-Object -First 1
@@ -405,9 +406,9 @@ Invoke-Step 'Blender' {
     }
     # b) Steam kütüphaneleri
     foreach ($lib in $script:Libraries) {
-        $b = Join-Path $lib 'common\Blender'
+        $b = [System.IO.Path]::Combine($lib, 'common\Blender')
         $searched += $b
-        $exe = Join-Path $b 'blender.exe'
+        $exe = [System.IO.Path]::Combine($b, 'blender.exe')
         if (Test-Path -LiteralPath $exe) {
             $hits += New-Object psobject -Property @{ Path = $b; Version = (Get-Item -LiteralPath $exe).VersionInfo.ProductVersion; Source = 'Steam' }
         }
