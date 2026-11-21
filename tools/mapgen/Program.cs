@@ -33,6 +33,9 @@ internal static class Program
             "build" => Build(cfg, args.Length > 1 ? args[1] : "data/processed/map_export_s3.json"),
             "reflect" => Reflect(),
             "modelinfo" => ModelInfo(cfg, args.Skip(1).ToArray()),
+            "prefabinfo" => PrefabInfo(cfg, args.Skip(1).ToArray()),
+            "buildgraph" => BuildGraph(cfg, args.Length > 1 ? args[1] : "data/processed/map_graph_s3.json",
+                                       args.Length > 2 ? args[2] : "data/processed/map_export_s3.json"),
             _ => 2,
         };
     }
@@ -88,6 +91,29 @@ internal static class Program
             {
                 var m = TruckLib.Models.Model.Open(p, fs);
                 Console.WriteLine($"{p}: looks=[{string.Join(",", m.Looks.Select(l => l.Name))}] variants=[{string.Join(",", m.Variants.Select(v => v.Name))}]");
+            }
+            catch (Exception ex) { Console.WriteLine($"{p}: HATA {ex.GetType().Name}: {ex.Message}"); }
+        }
+        return 0;
+    }
+
+    // ---------------------------------------------------------------- prefabinfo
+    // .ppd düğümlerini (konum, yön) ve prefab modelinin look/variant adlarını yazdırır.
+    static int PrefabInfo(JsonElement cfg, string[] ppds)
+    {
+        var gameRoot = cfg.GetProperty("game_root").GetString();
+        using var fs = HashFsReader.Open(Path.Combine(gameRoot, "base.scs"));
+        foreach (var p in ppds)
+        {
+            try
+            {
+                var d = TruckLib.Models.Ppd.PrefabDescriptor.Open(p, fs);
+                Console.WriteLine($"{p}: düğüm={d.Nodes.Count}");
+                for (int i = 0; i < d.Nodes.Count; i++)
+                    Console.WriteLine($"  node{i} pos={d.Nodes[i].Position} dir={d.Nodes[i].Direction}");
+                var pmd = Path.ChangeExtension(p, ".pmd");
+                var m = TruckLib.Models.Model.Open(pmd, fs);
+                Console.WriteLine($"  looks=[{string.Join(",", m.Looks.Select(l => l.Name))}] variants=[{string.Join(",", m.Variants.Select(v => v.Name))}]");
             }
             catch (Exception ex) { Console.WriteLine($"{p}: HATA {ex.GetType().Name}: {ex.Message}"); }
         }
@@ -172,6 +198,163 @@ internal static class Program
         Console.WriteLine($"Kaydedildi: {Path.Combine(outDir, name)}.mbd  yol zinciri={roads} segment={segs} atlanan={skipped} bina={buildings}");
         Console.WriteLine("Editörde: Map > Recompute map, ardından Save.");
         return 0;
+    }
+
+    // ---------------------------------------------------------------- buildgraph
+    // map_graph_s3.json (kavşaktan kavşağa bölünmüş ağ) + kavşak prefabları + map_export binaları.
+    static int BuildGraph(JsonElement cfg, string graphRel, string exportRel)
+    {
+        var graph = JsonDocument.Parse(File.ReadAllText(Path.Combine(Root, graphRel))).RootElement;
+        float scale = (float)graph.GetProperty("meta").GetProperty("scale_divisor").GetDouble();
+        var types = cfg.GetProperty("road_types");
+        var terrain = cfg.GetProperty("terrain_size");
+        var jcfg = cfg.GetProperty("junctions");
+        var gameRoot = cfg.GetProperty("game_root").GetString();
+        using var fs = HashFsReader.Open(Path.Combine(gameRoot, "base.scs"));
+
+        var specs = new Dictionary<int, (string token, TruckLib.Models.Ppd.PrefabDescriptor ppd)>();
+        foreach (var arms in new[] { 3, 4 })
+        {
+            var j = jcfg.GetProperty(arms.ToString());
+            specs[arms] = (j.GetProperty("token").GetString(),
+                           TruckLib.Models.Ppd.PrefabDescriptor.Open(j.GetProperty("ppd").GetString(), fs));
+        }
+        string look = jcfg.GetProperty("look").GetString(), variant = jcfg.GetProperty("variant").GetString();
+        float maxErr = (float)jcfg.GetProperty("max_angle_error_deg").GetDouble();
+
+        var map = new Map { NormalScale = scale, CityScale = scale };
+
+        // 1) kavşak prefabları: en iyi dönüş + kol/düğüm eşlemesi
+        var attach = new Dictionary<(int edge, string end), (Prefab p, Vector3 nodePos, Vector3 center)>();
+        int placed = 0, rejected = 0;
+        foreach (var jn in graph.GetProperty("junctions").EnumerateArray())
+        {
+            var arms = jn.GetProperty("arms").EnumerateArray().ToList();
+            if (!specs.TryGetValue(arms.Count, out var spec)) continue;
+            var center = new Vector3((float)jn.GetProperty("x").GetDouble(), 0, (float)jn.GetProperty("z").GetDouble());
+            var nodePos = spec.ppd.Nodes.Select(nd => nd.Position).ToList();
+            var armDir = arms.Select(a => Vector2.Normalize(new Vector2((float)a.GetProperty("dir")[0].GetDouble(), (float)a.GetProperty("dir")[1].GetDouble()))).ToList();
+
+            float bestCost = float.MaxValue, bestMax = 0; int bestYaw = 0; int[] bestPerm = null;
+            var perms = Permutations(Enumerable.Range(0, nodePos.Count).ToArray()).ToList();
+            for (int yawDeg = 0; yawDeg < 360; yawDeg++)
+            {
+                var q = Quaternion.CreateFromYawPitchRoll(yawDeg * MathF.PI / 180f, 0, 0);
+                var nd = nodePos.Select(p => { var v = Vector3.Transform(p, q); return Vector2.Normalize(new Vector2(v.X, v.Z)); }).ToList();
+                foreach (var perm in perms)
+                {
+                    float cost = 0, mx = 0;
+                    for (int i = 0; i < armDir.Count; i++)
+                    {
+                        float ang = MathF.Acos(Math.Clamp(Vector2.Dot(armDir[i], nd[perm[i]]), -1f, 1f)) * 180f / MathF.PI;
+                        cost += ang; mx = MathF.Max(mx, ang);
+                    }
+                    if (cost < bestCost) { bestCost = cost; bestMax = mx; bestYaw = yawDeg; bestPerm = perm; }
+                }
+            }
+            if (bestMax > maxErr) { rejected++; continue; }
+            try
+            {
+                var qb = Quaternion.CreateFromYawPitchRoll(bestYaw * MathF.PI / 180f, 0, 0);
+                var node0World = center + Vector3.Transform(nodePos[0], qb);
+                var pf = Prefab.Add(map, node0World, spec.token, spec.ppd, qb);
+                pf.Look = look;
+                pf.Variant = variant;
+                for (int i = 0; i < arms.Count; i++)
+                {
+                    var want = center + Vector3.Transform(nodePos[bestPerm[i]], qb);
+                    var actual = pf.Nodes.OrderBy(n => Vector3.DistanceSquared(n.Position, want)).First().Position;
+                    attach[(arms[i].GetProperty("edge").GetInt32(), arms[i].GetProperty("end").GetString())] = (pf, actual, center);
+                }
+                placed++;
+            }
+            catch (Exception ex) { rejected++; if (rejected < 10) Console.WriteLine($"kavşak {jn.GetProperty("id")}: {ex.Message}"); }
+        }
+
+        // 2) yollar
+        float R = (float)graph.GetProperty("meta").GetProperty("prefab_radius").GetDouble() + 3f;
+        int roads = 0, segs = 0, skipped = 0, connected = 0;
+        foreach (var e in graph.GetProperty("edges").EnumerateArray().OrderBy(e => e.GetProperty("prio").GetInt32()))
+        {
+            int id = e.GetProperty("id").GetInt32();
+            var kind = e.GetProperty("type").GetString();
+            var token = types.TryGetProperty(kind, out var t) ? t.GetString() : "ger1";
+            float ts = terrain.TryGetProperty(kind, out var tz) ? (float)tz.GetDouble() : (float)terrain.GetProperty("default").GetDouble();
+            var pts = e.GetProperty("pts").EnumerateArray().Select(p => new Vector3((float)p[0].GetDouble(), 0, (float)p[1].GetDouble())).ToList();
+            attach.TryGetValue((id, "a"), out var sa);
+            attach.TryGetValue((id, "b"), out var sb);
+            bool hasA = sa.p != null, hasB = sb.p != null;
+            if (hasA && hasB && ReferenceEquals(sa.p, sb.p)) { hasB = false; }
+            // ters yönlü tek yönlüler yalnızca kavşaksız kenarlarda çevrilir
+            if (!hasA && !hasB && e.GetProperty("reverse").GetBoolean()) pts.Reverse();
+            var mid = pts.Where(p => (!hasA || Vector3.Distance(p, sa.center) > R) && (!hasB || Vector3.Distance(p, sb.center) > R)).ToList();
+            var seq = new List<Vector3>();
+            if (hasA) seq.Add(sa.nodePos);
+            foreach (var p in mid) if (seq.Count == 0 || Vector3.Distance(seq[^1], p) > 3f) seq.Add(p);
+            if (hasB) { if (seq.Count > 0 && Vector3.Distance(seq[^1], sb.nodePos) < 3f) seq.RemoveAt(seq.Count - 1); seq.Add(sb.nodePos); }
+            if (seq.Count < 2) { skipped++; continue; }
+            try
+            {
+                Road road;
+                if (hasA)
+                {
+                    ushort ni = (ushort)sa.p.Nodes.FindIndex(n => Vector3.DistanceSquared(n.Position, sa.nodePos) < 0.01f);
+                    road = sa.p.AppendRoad(ni, seq[1], token, ts, ts);
+                    connected++;
+                }
+                else road = Road.Add(map, seq[0], seq[1], token, ts, ts);
+                segs++;
+                for (int i = 2; i < seq.Count; i++) { road = road.Append(seq[i]); segs++; }
+                if (hasB) { sb.p.Attach(road); connected++; }
+                roads++;
+            }
+            catch (Exception ex)
+            {
+                skipped++;
+                if (skipped < 15) Console.WriteLine($"kenar {id} atlandı: {ex.Message}");
+            }
+        }
+
+        // 3) binalar (map_export'tan, place=true olanlar)
+        int buildings = AddBuildings(map, cfg, Path.Combine(Root, exportRel));
+
+        var outDir = cfg.GetProperty("output_map_dir").GetString();
+        var name = cfg.GetProperty("output_map_name").GetString();
+        if (name == "saklaz" || name == "europe") throw new InvalidOperationException("Korumalı ad.");
+        map.Save(outDir, name, true);
+        Console.WriteLine($"Kaydedildi: {name}.mbd  kavşak={placed} (reddedilen {rejected})  yol={roads} segment={segs} bağlantı={connected} atlanan={skipped} bina={buildings}");
+        return 0;
+    }
+
+    static int AddBuildings(Map map, JsonElement cfg, string exportPath)
+    {
+        if (!File.Exists(exportPath)) return 0;
+        var export = JsonDocument.Parse(File.ReadAllText(exportPath)).RootElement;
+        var b = cfg.GetProperty("buildings");
+        int n = 0;
+        if (!export.TryGetProperty("buildings", out var blist)) return 0;
+        foreach (var bl in blist.EnumerateArray())
+        {
+            if (bl.TryGetProperty("place", out var pl) && !pl.GetBoolean()) continue;
+            var spec = PickModel(b, bl);
+            if (string.IsNullOrEmpty(spec)) continue;
+            var parts = spec.Split('|');
+            long osm = bl.GetProperty("osm").GetInt64();
+            string Pick(int i, string fb) => parts.Length <= i || parts[i].Length == 0 ? fb : parts[i].Split(',')[(int)(Math.Abs(osm) % parts[i].Split(',').Length)];
+            var pos = new Vector3((float)bl.GetProperty("x").GetDouble(), 0f, (float)bl.GetProperty("z").GetDouble());
+            var m = Model.Add(map, pos, parts[0], Pick(1, "default"), Pick(2, "default"));
+            m.Node.Rotation = Quaternion.CreateFromYawPitchRoll((float)(bl.GetProperty("heading_deg").GetDouble() * Math.PI / 180.0), 0, 0);
+            n++;
+        }
+        return n;
+    }
+
+    static IEnumerable<int[]> Permutations(int[] items)
+    {
+        if (items.Length <= 1) { yield return items; yield break; }
+        for (int i = 0; i < items.Length; i++)
+            foreach (var rest in Permutations(items.Where((_, k) => k != i).ToArray()))
+                yield return new[] { items[i] }.Concat(rest).ToArray();
     }
 
     static string PickModel(JsonElement b, JsonElement bl)

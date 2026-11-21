@@ -62,3 +62,17 @@ ile programatik üretim. TruckLib 0.5.3, harita sürümü 907'yi (ETS2 1.59–1.
 - 37 bin parçalık ilk tam harita editörde "Parameter packet batch system overflow" ile çöktü. Sadeleştirme (6 m), en kısa parça 8 m, servis yolu ve living_street dışlama, ara sokakta arazi 0 ile 9.411 yol / 16.671 parça / 704 bina → **çökmeden açıldı**, *Recompute map* + kayıt yapıldı.
 - SnowyMoon (ReShade + OptiScaler + DLSS5) kullanıcı tarafından `tools/maintenance/remove_snowymoon.ps1` ile yedeğe taşındı. Sonrasında editör 3 zararsız hata ile, 9 sn'de açıldı; OptiScaler katmanı yok.
 - Sıradaki: kavşak prefabları (2.235 nokta), daha yoğun bina yerleşimi (Buildings öğesi), şirket/başlangıç noktası, oyun içi test.
+
+## 7. Kavşaklar – 2026-11-21 12:45
+
+- `tools/geo/build_city_graph.py`: ağ gerçek OSM kesişimlerinden bölündü, prefab sığan kesişimler seçildi
+  (şehir yolları, 3-4 kol, kol ≥ 24 oyun m, kavşaklar arası ≥ 55 m) → 385 aday; sonra prefab olmayan
+  kesişimlerde parçalar yeniden birleştirildi (editör ~17 bin öğe üstünde render taşmasıyla çöküyor).
+- `tools/mapgen buildgraph`: her kavşakta .ppd düğümlerine göre 0–359° tarama + kol/düğüm eşlemesi
+  (en büyük açı hatası ≤ 40°). Prefablar: T `mod_ger_67` (ger_r1_x_r1_t_narrow_tmpl), X `mod_ger_63`
+  (ger_r1_x_r1_narrow_tmpl), look `ger_1`, variant `clean`. Yollar `AppendRoad` / `Attach` ile bağlandı.
+- Sonuç: **313 kavşak prefabı** (72 aday açı uyuşmazlığından reddedildi), 10.032 yol, 15.641 parça,
+  613 yol-prefab bağlantısı, 704 bina. Editörde çökmeden açıldı, *Recompute map* + kayıt yapıldı.
+- Bilinen: yüklemede "Terrain point count doesn't match" uyarıları (prefab arazisi, TruckLib'in prefab
+  desteği "deneysel"); yeniden hesaplama sonrası editör kaydıyla yazıldı. Ana yollar (D-100, TEM, birincil)
+  ile ara sokak kesişimleri ve sık aralıklı kesişimler henüz prefabsız.

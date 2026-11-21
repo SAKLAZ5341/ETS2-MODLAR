@@ -21,5 +21,13 @@
     "industrial": "3z001|variant1,variant2,variant3,variant4|blue,green,yellow,red,light,dark",
     "commercial": "0700b|var1,var2|default"
   },
+  "junctions": {
+    "_doc": "prefabinfo ile doğrulandı: düğümler merkezden 18 m, look ger_1..ger_5, variant clean",
+    "3": { "token": "mod_ger_67", "ppd": "/prefab2/cross_temp/ger/ger_r1_x_r1_t_narrow_tmpl.ppd" },
+    "4": { "token": "mod_ger_63", "ppd": "/prefab2/cross_temp/ger/ger_r1_x_r1_narrow_tmpl.ppd" },
+    "look": "ger_1",
+    "variant": "clean",
+    "max_angle_error_deg": 40
+  },
   "limits": { "max_roads": 0, "max_buildings": 0 }
 }
