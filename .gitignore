@@ -1,0 +1,12 @@
+# Büyük ham veriler depoya girmez; kaynakları GEO_DATA_SOURCES.md'de
+data/raw/*
+!data/raw/.gitkeep
+*.osm.pbf
+*.tif
+# Ortam raporları kişisel yol bilgisi içerebilir
+ENV_REPORT_*.md
+# Python
+__pycache__/
+.venv/
+# Paketler
+releases/*.scs
