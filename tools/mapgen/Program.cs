@@ -316,6 +316,69 @@ internal static class Program
             catch (Exception ex) { rejected++; if (rejected < 10) Console.WriteLine($"kavşak {jn.GetProperty("id")}: {ex.Message}"); }
         }
 
+        // 1b) şirket depoları (iki düğümlü prefab, yol ikiye bölünmüş) + Company öğeleri
+        int depots = 0;
+        if (cfg.TryGetProperty("depots", out var dcfg) && graph.TryGetProperty("depots", out var dlist))
+        {
+            var city = dcfg.GetProperty("city").GetString();
+            foreach (var d in dlist.EnumerateArray())
+            {
+                try
+                {
+                    var kind = dcfg.GetProperty("kinds").GetProperty(d.GetProperty("kind").GetString());
+                    var company = d.GetProperty("company").GetString();
+                    var ppd = TruckLib.Models.Ppd.PrefabDescriptor.Open(kind.GetProperty("ppd").GetString(), fs);
+                    Vector3 P(JsonElement a) => V(a[0].GetDouble(), a[1].GetDouble());
+                    Vector3 n0 = P(d.GetProperty("n0")), n1 = P(d.GetProperty("n1")), body = P(d.GetProperty("body"));
+                    Vector3 p0 = ppd.Nodes[0].Position, p1 = ppd.Nodes[1].Position;
+                    static float H(Vector3 v) => MathF.Atan2(v.X, v.Z);
+                    (Quaternion q, Vector3 origin, Vector3 first) best = default; float bestD = float.MaxValue;
+                    foreach (var (a, b) in new[] { (n0, n1), (n1, n0) })
+                    {
+                        var q = Quaternion.CreateFromYawPitchRoll(H(b - a) - H(p1 - p0), 0, 0);
+                        var origin = a - Vector3.Transform(p0, q);
+                        // depo gövdesi düğüm hattının diğer yanında: prefab merkezi (0,0) gövdeye yakın olmalı
+                        float dist = Vector3.Distance(origin, body);
+                        if (dist < bestD) { bestD = dist; best = (q, origin, a); }
+                    }
+                    var pf = Prefab.Add(map, best.first, kind.GetProperty("token").GetString(), ppd, best.q);
+                    pf.Look = kind.GetProperty("look").GetString();
+                    if (dcfg.GetProperty("variants").TryGetProperty(company, out var vr)) pf.Variant = vr.GetString();
+                    foreach (var (arm, want) in new[] { (d.GetProperty("arm0"), n0), (d.GetProperty("arm1"), n1) })
+                    {
+                        var actual = pf.Nodes.OrderBy(n => Vector3.DistanceSquared(n.Position, want)).First().Position;
+                        attach[(arm.GetProperty("edge").GetInt32(), arm.GetProperty("end").GetString())] = (pf, actual, actual, 1f);
+                    }
+                    var co = Company.Add(map, pf, best.origin);
+                    co.CompanyName = company;
+                    co.CityName = city;
+                    foreach (var sp in ppd.SpawnPoints)
+                    {
+                        var (dt, diff) = sp.Type switch
+                        {
+                            TruckLib.Models.Ppd.SpawnPointType.CompanyPoint => (CompanyDepotType.Load, CompanyUnloadDifficulty.None),
+                            TruckLib.Models.Ppd.SpawnPointType.UnloadEasy => (CompanyDepotType.Unload, CompanyUnloadDifficulty.Easy),
+                            TruckLib.Models.Ppd.SpawnPointType.UnloadMedium => (CompanyDepotType.Unload, CompanyUnloadDifficulty.Medium),
+                            TruckLib.Models.Ppd.SpawnPointType.UnloadHard => (CompanyDepotType.Unload, CompanyUnloadDifficulty.Hard),
+                            _ => ((CompanyDepotType)(-1), CompanyUnloadDifficulty.None),
+                        };
+                        if ((int)dt < 0) continue;
+                        co.SpawnPoints.Add(best.origin + Vector3.Transform(sp.Position, best.q), best.q * sp.Rotation, dt, diff);
+                    }
+                    depots++;
+                    Console.WriteLine($"depo {d.GetProperty("id")}: {company} ({d.GetProperty("kind")}) noktalar={co.SpawnPoints.Count}");
+                }
+                catch (Exception ex) { Console.WriteLine($"depo {d.GetProperty("id")} atlandı: {ex.Message}"); }
+            }
+            if (dcfg.GetProperty("city_area").GetBoolean())
+            {
+                var xs = graph.GetProperty("edges").EnumerateArray().SelectMany(e => e.GetProperty("pts").EnumerateArray()).Select(p => (x: p[0].GetDouble(), z: p[1].GetDouble())).ToList();
+                var lo = V(xs.Min(p => p.x), xs.Min(p => p.z)); var hi = V(xs.Max(p => p.x), xs.Max(p => p.z));
+                var ca = CityArea.Add(map, lo, city, hi.X - lo.X, hi.Z - lo.Z);
+                ca.ShowInUi = true;
+            }
+        }
+
         // 2) yollar
         float R = (float)graph.GetProperty("meta").GetProperty("prefab_radius").GetDouble() + 3f;
         int roads = 0, segs = 0, skipped = 0, connected = 0;
@@ -371,7 +434,7 @@ internal static class Program
         if (name == "saklaz" || name == "europe") throw new InvalidOperationException("Korumalı ad.");
         map.Save(outDir, name, true);
         Console.WriteLine("Prefab dağılımı: " + string.Join(", ", byToken.Select(kv => $"{kv.Key}={kv.Value}")));
-        Console.WriteLine($"Kaydedildi: {name}.mbd  kavşak={placed} (reddedilen {rejected})  yol={roads} segment={segs} bağlantı={connected} atlanan={skipped} bina={buildings} zemin={ground}");
+        Console.WriteLine($"Kaydedildi: {name}.mbd  kavşak={placed} (reddedilen {rejected})  yol={roads} segment={segs} bağlantı={connected} atlanan={skipped} bina={buildings} zemin={ground} depo={depots}");
         return 0;
     }
 

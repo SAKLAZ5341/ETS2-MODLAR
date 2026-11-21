@@ -207,9 +207,13 @@ def main() -> None:
             m["pts"] = [list(c) for c in o]
     edges = merged
 
+    # 5) Şirket depoları: sanayi alanlarında, düz ve uzun bir şehir yolu parçasının yanına iki düğümlü depo
+    #    prefabı. Parça ikiye bölünür; depo düğümleri iki yeni kenar ucuna gelir.
+    depots = place_depots(edges, chosen, S, a)
+
     out = {"meta": {"scale_divisor": S, "origin_osm_node": 26505108, "axes": "+X doğu, +Z güney, Y=0",
                     "prefab_radius": a.prefab_radius, "attribution": "(c) OpenStreetMap contributors, ODbL 1.0"},
-           "edges": edges, "junctions": chosen}
+           "edges": edges, "junctions": chosen, "depots": depots}
     dst = ROOT / "data" / "processed" / f"map_graph_s{S:g}.json"
     dst.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
     deg = Counter(len(v) for v in inc.values())
@@ -217,10 +221,101 @@ def main() -> None:
                "graph_nodes": len(inc), "degree_hist": dict(sorted(deg.items())),
                "junction_candidates_city": len(cand), "junctions_chosen": len(chosen),
                "junctions_T": sum(1 for j in chosen if len(j["arms"]) == 3),
-               "junctions_X": sum(1 for j in chosen if len(j["arms"]) == 4)}
+               "junctions_X": sum(1 for j in chosen if len(j["arms"]) == 4),
+               "depots": len(depots), "depot_companies": Counter(d["company"] for d in depots)}
     (ROOT / "data" / "processed" / f"map_graph_s{S:g}_summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(summary, ensure_ascii=False, indent=2))
+
+
+# Depo prefabları (ana oyun, Avusturya seti): düğüm0 → düğüm1 aralığı (oyun m). Şirketler sırayla dağıtılır.
+DEPOT_TYPES = [
+    {"company": "stokes", "kind": "generic", "span": 100.0},
+    {"company": "lkwlog", "kind": "logistic", "span": 80.0},
+    {"company": "trameri", "kind": "light_factory", "span": 90.65},
+    {"company": "transinet", "kind": "generic", "span": 100.0},
+    {"company": "tradeaux", "kind": "logistic", "span": 80.0},
+    {"company": "posped", "kind": "logistic", "span": 80.0},
+]
+
+
+def place_depots(edges, chosen, S, a, max_depots=18, min_gap=300.0, clear=45.0):
+    """Sanayi poligonu içindeki uzun düz parçalara depo yerleştirir; edges listesini yerinde böler."""
+    from shapely.geometry import Point, Polygon
+    from shapely.strtree import STRtree
+
+    g = lambda x, y: ((x - E0) / S, -(y - N0) / S)
+    inds = []
+    for el in json.loads((RAW / "landuse.json").read_text(encoding="utf-8"))["elements"]:
+        t = el.get("tags", {})
+        if el["type"] == "way" and "geometry" in el and (t.get("landuse") == "industrial" or t.get("industrial")):
+            pts = [g(*T.transform(p["lon"], p["lat"])) for p in el["geometry"]]
+            if len(pts) >= 4 and pts[0] == pts[-1]:
+                p = Polygon(pts)
+                if p.is_valid and p.area > 2000:
+                    inds.append(p)
+    itree = STRtree(inds)
+    lines = [LineString(e["pts"]) for e in edges]
+    ltree = STRtree(lines)
+    jpts = [(j["x"], j["z"]) for j in chosen]
+    out, used = [], []
+    next_node = max(max(e["a"], e["b"]) for e in edges) + 1
+    k = 0
+    for ed in sorted(edges, key=lambda e: -e["len"]):
+        if len(out) >= max_depots:
+            break
+        if ed["type"] not in ("r1_city", "r1_city_narrow") or ed["oneway"]:
+            continue
+        typ = DEPOT_TYPES[k % len(DEPOT_TYPES)]
+        need = typ["span"] + 24
+        pts = ed["pts"]
+        for i in range(len(pts) - 1):
+            P, Q = pts[i], pts[i + 1]
+            L = math.dist(P, Q)
+            if L < need:
+                continue
+            mid = ((P[0] + Q[0]) / 2, (P[1] + Q[1]) / 2)
+            if any(math.dist(mid, u) < min_gap for u in used) or any(math.dist(mid, j) < typ["span"] / 2 + 26 for j in jpts):
+                continue
+            mp = Point(mid)
+            if not any(inds[q].contains(mp) for q in itree.query(mp)):
+                continue
+            ux, uz = (Q[0] - P[0]) / L, (Q[1] - P[1]) / L
+            side = None
+            for sgn in (1, -1):  # yolun sağı/solu: depo gövdesi ~55 m içeride
+                nx, nz = -uz * sgn, ux * sgn
+                body = Point(mid[0] + nx * 60, mid[1] + nz * 60)
+                near = [q for q in ltree.query(body.buffer(clear)) if q != ed["id"] and lines[q].distance(body) < clear]
+                if not near:
+                    side = (nx, nz)
+                    break
+            if side is None:
+                continue
+            h = typ["span"] / 2
+            n0 = (round(mid[0] - ux * h, 3), round(mid[1] - uz * h, 3))
+            n1 = (round(mid[0] + ux * h, 3), round(mid[1] + uz * h, 3))
+            # kenarı böl: A = baş..n0, B = n1..son
+            ida, idb = next_node, next_node + 1
+            next_node += 2
+            B = dict(ed, id=len(edges), a=idb, pts=[list(n1)] + [list(p) for p in pts[i + 1:]])
+            ed["pts"] = [list(p) for p in pts[:i + 1]] + [list(n0)]
+            ed["b"] = ida
+            for e2 in (ed, B):
+                e2["len"] = round(sum(math.dist(p, q) for p, q in zip(e2["pts"], e2["pts"][1:])), 1)
+            # B, eski kenarın b ucundaki kavşak kolunu devralır
+            for j in chosen:
+                for arm in j["arms"]:
+                    if arm["edge"] == ed["id"] and arm["end"] == "b":
+                        arm["edge"] = B["id"]
+            edges.append(B)
+            used.append(mid)
+            out.append({"id": len(out), "company": typ["company"], "kind": typ["kind"],
+                        "n0": list(n0), "n1": list(n1),
+                        "body": [round(mid[0] + side[0] * 55, 2), round(mid[1] + side[1] * 55, 2)],
+                        "arm0": {"edge": ed["id"], "end": "b"}, "arm1": {"edge": B["id"], "end": "a"}})
+            k += 1
+            break
+    return out
 
 
 if __name__ == "__main__":

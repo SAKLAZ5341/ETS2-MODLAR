@@ -134,5 +134,35 @@
         "material": "7"
       }
     }
+  },
+  "depots": {
+    "_doc": "İki düğümlü depo prefabları (ana oyun, Avusturya seti). variants = şirket tabelası.",
+    "city": "gebze",
+    "kinds": {
+      "generic": {
+        "token": "at_0j004",
+        "ppd": "/prefab2/depot/generic_warehouse/generic_warehouse_01_at.ppd",
+        "look": "default"
+      },
+      "logistic": {
+        "token": "at_0j009",
+        "ppd": "/prefab2/depot/logistic/logistic_01_at.ppd",
+        "look": "default"
+      },
+      "light_factory": {
+        "token": "at_0j008",
+        "ppd": "/prefab2/depot/light_factory/light_factory_01_at.ppd",
+        "look": "default"
+      }
+    },
+    "variants": {
+      "stokes": "de_stokes",
+      "transinet": "de_trans",
+      "lkwlog": "de_lkwlog",
+      "tradeaux": "at_tradeaux",
+      "posped": "lux_posped",
+      "trameri": "at_trameri"
+    },
+    "city_area": true
   }
 }

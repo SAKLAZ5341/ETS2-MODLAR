@@ -1,18 +1,27 @@
 {
-  "scale": 3.0,
-  "edges": 10585,
-  "segments": 16405,
-  "graph_nodes": 15319,
+  "scale": 3,
+  "edges": 12514,
+  "segments": 22137,
+  "graph_nodes": 18079,
   "degree_hist": {
-    "1": 775,
-    "2": 1387,
-    "3": 10624,
-    "4": 2457,
-    "5": 65,
+    "1": 1052,
+    "2": 1747,
+    "3": 12386,
+    "4": 2811,
+    "5": 72,
     "6": 11
   },
-  "junction_candidates_city": 586,
-  "junctions_chosen": 436,
-  "junctions_T": 396,
-  "junctions_X": 40
+  "junction_candidates_city": 807,
+  "junctions_chosen": 609,
+  "junctions_T": 552,
+  "junctions_X": 57,
+  "depots": 8,
+  "depot_companies": {
+    "stokes": 2,
+    "lkwlog": 2,
+    "trameri": 1,
+    "transinet": 1,
+    "tradeaux": 1,
+    "posped": 1
+  }
 }

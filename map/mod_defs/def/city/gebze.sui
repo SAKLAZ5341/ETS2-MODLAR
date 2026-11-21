@@ -1,0 +1,6 @@
+city_data : city.gebze
+{
+	city_name: "Gebze"
+	country: turkey
+	population: 400000
+}

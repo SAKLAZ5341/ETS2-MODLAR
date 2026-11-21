@@ -127,3 +127,17 @@ Hedef: Gebze + Darıca + Dilovası, gerçekçi ve oynanabilir. Sıra:
   (`docs/img/ingame_ground_trees.jpg`).
 - Not: Bilgisayar yeniden başladıktan sonra Steam başlatma-seçenekleri penceresi açılıp exe'yi kapatıyordu (kod 53).
   Çözüm: `...\bin\win_x64\steam_appid.txt` (içerik `227300`) – silinerek geri alınır.
+
+## 12. Dilovası, şirket depoları, şehir – 2026-11-21 17:40
+
+- `config/aoi.json` çekirdek alanı doğuya 29.585'e genişletildi (Dilovası + OSB). Graf: 12.5 bin kenar, 609 kavşak adayı.
+- `build_city_graph.py` adım 5 `place_depots`: sanayi poligonu içindeki, kavşaklardan uzak, ≥ (açıklık+24) m düz
+  şehir yolu parçaları ikiye bölünür, araya iki düğümlü depo prefabı girer; gövde tarafında 45 m içinde yol olmamalı.
+  Şirketler sırayla: stokes, lkwlog, trameri, transinet, tradeaux, posped (Avusturya seti depoları
+  `at_0j004` generic_warehouse, `at_0j009` logistic, `at_0j008` light_factory; tabela = prefab variant).
+- `mapgen buildgraph`: depo prefabı iki yol ucuna bağlanır, `Company` öğesi (şehir `gebze`) ve .ppd'deki
+  yükleme/boşaltma noktaları eklenir; tüm alanı kapsayan `CityArea` "gebze".
+- Mod tanımları `map/mod_defs/def` → `mod/user_map/def`: `city.saklaz.sii` + `city/gebze.sui` (ülke: turkey),
+  `company/<şirket>/editor/gebze.sii`.
+- Sonuç: 475 kavşak, 11.760 yol, 3.674 zemin, 8 depo. Bina indirmesi (Dilovası dahil) Overpass'ta uzun sürüyor;
+  şimdilik eski 704 bina.
