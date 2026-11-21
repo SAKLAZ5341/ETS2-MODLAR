@@ -152,3 +152,15 @@ Hedef: Gebze + Darıca + Dilovası, gerçekçi ve oynanabilir. Sıra:
   modeliyle çöküyor. Çözüm: sınırlı model/variant seti. Kısa çıkmaz sokaklar (< 60 m) atıldı
   (kenar 12,5 bin → 7,8 bin), zemin hücresi 96 m.
 - Steam: `bin\win_x64\steam_appid.txt` olmadan exe Steam'e devrediyor ve başlatma penceresinde takılıyor.
+
+## 14. Şehirler, şirketler, oynatma – 2026-11-21 17:30
+
+- 4 şehir OSM ilçe sınırlarından: `gebze`, `darica`, `cayirova`, `dilovasi` (ülke `turkey`). `CityArea` konumu
+  alanın **merkezi**dir (köşe sanıldığında doğu yarısındaki şirketler "assignment" hatası veriyordu).
+- Oyun şirket öğesinin şehrini konumdaki CityArea'dan seçiyor; kutular çakıştığı için `write_mod_defs.py`
+  her depo için onu içeren tüm şehirlere `company_def` yazar.
+- Depolar: stokes, tradeaux, trameri, transinet (lkwlog/posped sürekli hata verdiği için çıkarıldı).
+  Son durum: 6 deponun 5'i hatasız; `tradeaux@dilovasi` için "Invalid company item assignment" kalıyor.
+- Önizlemede AI trafiği etkin (logda trafik römorku yükleme denemeleri), kırsal başlangıç noktasında seyrek.
+- **Oynatma:** masaüstünde "SAKLAZ Gebze Haritasi" kısayolu → `tools/play/play_saklaz.ps1` (editörü kapatır,
+  önizlemeyi başlatır). Oyun içi arayüz otomatik tıklamaya yanıt vermediğinden iş pazarı ekrandan doğrulanamadı.
