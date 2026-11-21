@@ -47,8 +47,10 @@ def main() -> None:
     ap.add_argument("--simplify-m", type=float, default=1.5, help="Douglas-Peucker toleransı (gerçek m)")
     ap.add_argument("--min-seg", type=float, default=2.0, help="en kısa yol parçası (oyun m)")
     ap.add_argument("--exclude", nargs="*", default=[], help="dışlanacak OSM highway sınıfları")
-    ap.add_argument("--road-clearance", type=float, default=9.0, help="bina merkezi - yol arası en az oyun m")
-    ap.add_argument("--min-building-gap", type=float, default=22.0, help="bina merkezleri arası en az oyun m")
+    ap.add_argument("--road-clearance", type=float, default=8.0, help="bina merkezi - yol arası en az oyun m")
+    ap.add_argument("--min-building-gap", type=float, default=18.0, help="bina merkezleri arası en az oyun m")
+    ap.add_argument("--max-buildings", type=int, default=2800, help="en büyükten başlayarak en fazla bu kadar bina (editör öğe sınırı)")
+    ap.add_argument("--road-clearance-default", type=float, default=8.0)
     a = ap.parse_args()
     S = a.scale
     s, w, n, e = CFG["core_bbox_swne"]
@@ -139,6 +141,8 @@ def main() -> None:
                 continue
             cell[k].append(p)
             placed.append(b)
+            if a.max_buildings and len(placed) >= a.max_buildings:
+                break
     for b in buildings:
         b["place"] = False
     for b in placed:

@@ -114,16 +114,21 @@ internal static class Program
     static int ModelInfo(JsonElement cfg, string[] pmds)
     {
         var gameRoot = cfg.GetProperty("game_root").GetString();
-        using var fs = HashFsReader.Open(Path.Combine(gameRoot, "base.scs"));
+        // base.scs + harita DLC'leri: modelin bulunduğu ilk arşiv kullanılır
+        var packs = new[] { "base.scs", "dlc_balkan_e.scs", "dlc_balkan_w.scs", "dlc_greece.scs", "dlc_east.scs", "dlc_it.scs" }
+            .Select(f => Path.Combine(gameRoot, f)).Where(File.Exists).Select(f => (name: Path.GetFileName(f), fs: HashFsReader.Open(f))).ToList();
         foreach (var p in pmds)
         {
+            var hit = packs.FirstOrDefault(k => k.fs.FileExists(p));
+            if (hit.fs == null) { Console.WriteLine($"{p}: YOK"); continue; }
             try
             {
-                var m = TruckLib.Models.Model.Open(p, fs);
-                Console.WriteLine($"{p}: looks=[{string.Join(",", m.Looks.Select(l => l.Name))}] variants=[{string.Join(",", m.Variants.Select(v => v.Name))}]");
+                var m = TruckLib.Models.Model.Open(p, hit.fs);
+                Console.WriteLine($"{p} [{hit.name}]: looks=[{string.Join(",", m.Looks.Select(l => l.Name))}] variants=[{string.Join(",", m.Variants.Select(v => v.Name))}] boyut={m.BoundingBox}");
             }
             catch (Exception ex) { Console.WriteLine($"{p}: HATA {ex.GetType().Name}: {ex.Message}"); }
         }
+        foreach (var k in packs) k.fs.Dispose();
         return 0;
     }
 
@@ -253,6 +258,7 @@ internal static class Program
         float maxErr = (float)jcfg.GetProperty("max_angle_error_deg").GetDouble();
 
         var map = new Map { NormalScale = scale, CityScale = scale };
+        var noBuild = new List<(Vector3 c, float r)>(); // bina konmayacak daireler (kavşak, depo)
 
         // 0) başlangıç noktası: önizleme tırı (0,0,0)'a, -Z yönüne bakarak koyar. Haritayı, düz ve
         //    boş bir şehir yolu parçasının ortası orijine gelecek şekilde kaydırırız.
@@ -309,6 +315,7 @@ internal static class Program
                     var want = center + Vector3.Transform(nodePos[bestPerm[i]], qb);
                     var actual = pf.Nodes.OrderBy(n => Vector3.DistanceSquared(n.Position, want)).First().Position;
                     attach[(arms[i].GetProperty("edge").GetInt32(), arms[i].GetProperty("end").GetString())] = (pf, actual, center, radius);
+                    if (i == 0) noBuild.Add((center, radius + 6));
                 }
                 byToken[spec.token] = byToken.GetValueOrDefault(spec.token) + 1;
                 placed++;
@@ -350,6 +357,7 @@ internal static class Program
                         attach[(arm.GetProperty("edge").GetInt32(), arm.GetProperty("end").GetString())] = (pf, actual, actual, 1f);
                     }
                     var co = Company.Add(map, pf, best.origin);
+                    noBuild.Add((best.origin, 75f));
                     co.CompanyName = company;
                     co.CityName = city;
                     foreach (var sp in ppd.SpawnPoints)
@@ -401,6 +409,18 @@ internal static class Program
             foreach (var p in mid) if (seq.Count == 0 || Vector3.Distance(seq[^1], p) > 3f) seq.Add(p);
             if (hasB) { if (seq.Count > 0 && Vector3.Distance(seq[^1], sb.nodePos) < 3f) seq.RemoveAt(seq.Count - 1); seq.Add(sb.nodePos); }
             if (seq.Count < 2) { skipped++; continue; }
+            // oyun sınırı: tek yol parçası ≤ 1000 m; uzun parçaları ≤ 400 m'ye böl
+            for (int i = seq.Count - 1; i > 0; i--)
+            {
+                float L = Vector3.Distance(seq[i - 1], seq[i]);
+                int k = (int)MathF.Ceiling(L / 400f);
+                for (int s = 1; s < k; s++) seq.Insert(i, seq[i - 1]); // yer tutucu, aşağıda doldurulur
+                if (k > 1)
+                {
+                    var a0 = seq[i - 1]; var b0 = seq[i + k - 1];
+                    for (int s = 1; s < k; s++) seq[i - 1 + s] = Vector3.Lerp(a0, b0, s / (float)k);
+                }
+            }
             try
             {
                 Road road;
@@ -424,7 +444,7 @@ internal static class Program
         }
 
         // 3) binalar (map_export'tan, place=true olanlar)
-        int buildings = AddBuildings(map, cfg, Path.Combine(Root, exportRel), new Vector3(off.X, 0, off.Y));
+        int buildings = AddBuildings(map, cfg, Path.Combine(Root, exportRel), new Vector3(off.X, 0, off.Y), noBuild);
 
         // 4) zemin: ground_s3.json sütun parçaları → Terrain öğeleri (yolların biraz altında)
         int ground = AddGround(map, cfg, Path.Combine(Root, "data", "processed", "ground_s3.json"), new Vector3(off.X, 0, off.Y));
@@ -532,7 +552,7 @@ internal static class Program
         return n;
     }
 
-    static int AddBuildings(Map map, JsonElement cfg, string exportPath, Vector3 off)
+    static int AddBuildings(Map map, JsonElement cfg, string exportPath, Vector3 off, List<(Vector3 c, float r)> noBuild = null)
     {
         if (!File.Exists(exportPath)) return 0;
         var export = JsonDocument.Parse(File.ReadAllText(exportPath)).RootElement;
@@ -548,6 +568,7 @@ internal static class Program
             long osm = bl.GetProperty("osm").GetInt64();
             string Pick(int i, string fb) => parts.Length <= i || parts[i].Length == 0 ? fb : parts[i].Split(',')[(int)(Math.Abs(osm) % parts[i].Split(',').Length)];
             var pos = off + new Vector3((float)bl.GetProperty("x").GetDouble(), 0f, (float)bl.GetProperty("z").GetDouble());
+            if (noBuild != null && noBuild.Any(z => Vector3.DistanceSquared(z.c, pos) < z.r * z.r)) continue;
             var m = Model.Add(map, pos, parts[0], Pick(1, "default"), Pick(2, "default"));
             m.Node.Rotation = Quaternion.CreateFromYawPitchRoll((float)(bl.GetProperty("heading_deg").GetDouble() * Math.PI / 180.0), 0, 0);
             n++;
@@ -571,10 +592,16 @@ internal static class Program
             "industrial" or "warehouse" or "factory" or "manufacture" => "industrial",
             "commercial" or "retail" or "office" or "supermarket" => "commercial",
             "apartments" or "residential" => "apartment",
-            "house" or "detached" or "semidetached_house" => "small_house",
-            _ => (bl.GetProperty("area_real_m2").GetDouble() > 400 ? "apartment" : "small_house"),
+            "house" or "detached" or "semidetached_house" or "bungalow" or "terrace" => "small_house",
+            "mosque" or "religious" => "mosque",
+            _ => (bl.GetProperty("area_real_m2").GetDouble() > 250 ? "apartment" : "small_house"),
         };
-        return b.TryGetProperty(key, out var v) ? v.GetString() : null;
+        if (!b.TryGetProperty(key, out var v)) return null;
+        if (v.ValueKind == JsonValueKind.String) return v.GetString();
+        // liste: OSM id'ye göre sabit ama çeşitli seçim
+        var arr = v.EnumerateArray().ToArray();
+        long osm = Math.Abs(bl.GetProperty("osm").GetInt64());
+        return arr.Length == 0 ? null : arr[(int)((osm / 7) % arr.Length)].GetString();
     }
 
     static string FindRoot()

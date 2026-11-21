@@ -1,72 +1,75 @@
 {
-  "scale": 3.0,
-  "roads": 9411,
-  "road_nodes": 26082,
-  "road_km_game": 613.9,
+  "scale": 3,
+  "roads": 14186,
+  "road_nodes": 61033,
+  "road_km_game": 937.3,
   "by_class": {
-    "motorway": 43,
-    "primary": 405,
-    "trunk": 104,
-    "motorway_link": 77,
-    "residential": 6804,
-    "tertiary": 645,
-    "primary_link": 97,
-    "secondary": 379,
-    "unclassified": 683,
-    "trunk_link": 117,
-    "tertiary_link": 22,
-    "secondary_link": 35
+    "motorway": 118,
+    "trunk_link": 193,
+    "primary": 500,
+    "trunk": 141,
+    "motorway_link": 188,
+    "residential": 7942,
+    "tertiary": 979,
+    "primary_link": 134,
+    "secondary": 577,
+    "service": 2052,
+    "unclassified": 946,
+    "living_street": 309,
+    "tertiary_link": 46,
+    "secondary_link": 56,
+    "road": 5
   },
-  "junctions_3plus": 1526,
-  "buildings": 23917,
-  "buildings_placed": 704,
+  "junctions_3plus": 2495,
+  "buildings": 34117,
+  "buildings_placed": 1600,
   "buildings_by_kind_top": [
     [
       "yes",
-      20778
+      27444
     ],
     [
       "apartments",
-      1083
+      2376
     ],
     [
       "industrial",
-      640
+      2303
     ],
     [
       "house",
-      635
+      926
     ],
     [
       "mosque",
-      173
+      193
     ],
     [
       "school",
-      114
+      156
     ],
     [
       "roof",
-      102
+      130
     ],
     [
       "commercial",
-      80
+      107
+    ],
+    [
+      "construction",
+      92
     ],
     [
       "shed",
-      44
-    ],
-    [
-      "university",
-      41
+      52
     ]
   ],
   "extent_game_m": [
     -2807,
-    1840,
-    -2805,
-    1781
+    4228,
+    -2874,
+    2112
   ],
-  "file_mb": 6.5
+  "file_mb": 10.0
 }
