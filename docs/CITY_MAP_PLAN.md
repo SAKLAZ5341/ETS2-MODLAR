@@ -175,3 +175,15 @@ Hedef: Gebze + Darıca + Dilovası, gerçekçi ve oynanabilir. Sıra:
   (`near_main`), kalanlar `*_far` listelerinden az parçalı Akdeniz/Balkan "mid" modelleri.
 - Sonuç: **3.235 bina** oyunda taşmadan yükleniyor (4.157'de taşıyor). Editörden geçirmeden de oynanıyor.
 - GitHub: `SAKLAZ5341/ETS2-MODLAR` (main).
+
+## 16. Bağımsız harita paketi – 2026-11-21 22:15
+
+- `tools/packaging/build_scs.py --map saklaz_city` artık `.set`/`.expa` yan dosyalarını ve `map/mod_defs/def`
+  (şehir + şirket tanımları) içeriğini de pakete koyuyor. Çıktı: `releases/saklaz_turkiye_map_0.2.0-dev_*.scs`
+  (47 dosya, 1,8 MB, zip testi geçti). Manifest 0.2.0-dev, kategori `map`.
+- Referans: Grand Utopia (kullanıcının mod klasöründe, salt okunur incelendi) haritasını `map/grandutopia.mbd`
+  adıyla getiriyor, `europe.mbd`'nin yerine geçmiyor; ana oyun şehirlerini `def/city.sii` ile boşaltıyor.
+  Bizim paket de haritayı kendi adıyla getiriyor. **Yeni profilde harita seçimiyle oyunda doğrulanmadı.**
+- Açık: son oyun logunda (18:10) ≥ 4 depo "Company item without company assignment" (koordinatlardan:
+  transinet@gebze, trameri@dilovasi, stokes@dilovasi …). Tanım dosyaları mevcut; neden oyunda
+  `g_developer 2` ile tam liste alınarak incelenecek.

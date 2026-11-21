@@ -1,6 +1,10 @@
-SAKLAZ Türkiye Map - 0.1.0 geliştirme prototipi
-Gebze - Darıca - Çayırova, D-100 ve TEM (O-4) bağlantıları.
-Oynanabilir değildir; yalnızca test içindir.
+SAKLAZ Türkiye Map - 0.2.0 geliştirme sürümü
+Bağımsız (standalone) harita: Gebze, Darıca, Çayırova ve Dilovası (1:3 şehir ölçeği).
+Gerçek OpenStreetMap yol ağı, kavşaklar, binalar, zemin ve ağaçlar, şirket depoları.
+Yalnızca ana oyun içerikleri kullanılır (DLC gerekmez). ETS2 1.62.
+
+Kullanım: modu etkinleştirin, yeni profil oluştururken haritayı seçin.
+Geliştirme sürümüdür; ana yol (D-100/TEM) kavşakları ve bazı depolar eksiktir.
 
 Harita verisi: © OpenStreetMap katkıda bulunanlar (ODbL 1.0)
 https://www.openstreetmap.org/copyright

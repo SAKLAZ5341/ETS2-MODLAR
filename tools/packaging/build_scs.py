@@ -44,8 +44,17 @@ def main() -> None:
     sec = mbd.with_suffix("")
     files = [(PKG / n, n) for n in ("manifest.sii", "description.txt", "icon.jpg") if (PKG / n).exists()]
     files.append((mbd, f"map/{mbd.name}"))
+    # editörün harita yan dosyaları (.set = ayarlar, .expa = genişleme, .climate.sii varsa)
+    for ext in (".set", ".expa", ".climate.sii"):
+        side = mbd.with_name(mbd.stem + ext)
+        if side.exists():
+            files.append((side, f"map/{side.name}"))
     if sec.is_dir():
         files += [(p, f"map/{sec.name}/{p.relative_to(sec).as_posix()}") for p in sorted(sec.rglob("*")) if p.is_file()]
+    # şehir / şirket tanımları (tools/mapgen/write_mod_defs.py çıktısı)
+    defs = ROOT / "map" / "mod_defs" / "def"
+    if defs.is_dir():
+        files += [(p, f"def/{p.relative_to(defs).as_posix()}") for p in sorted(defs.rglob("*")) if p.is_file()]
     out = ROOT / "releases" / f"saklaz_turkiye_map_{ver}_{datetime.now():%Y%m%d_%H%M}.scs"
     print(f"{len(files)} dosya -> {out}")
     for src, arc in files[:20]:
