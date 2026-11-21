@@ -115,3 +115,15 @@ Hedef: Gebze + Darıca + Dilovası, gerçekçi ve oynanabilir. Sıra:
 4. **Binalar:** 24.706 OSM binasından daha fazlası (öğe sınırı ~17 bin gözetilerek `Buildings` dizileri).
 5. **Şirketler:** `CityArea` + şirket prefabı + `Company`; mod içinde `def/city` ve `def/company` tanımları.
 6. **Trafik + paket:** `TrafficArea`, sonra oynanabilir .scs mod paketi.
+
+## 11. Zemin ve ağaçlar – 2026-11-21 17:05
+
+- `tools/geo/fetch_osm.py` → yeni `nature` sorgusu (orman, park, tarla, çalılık, su, kum…; 6.919 öğe).
+- `tools/geo/build_ground.py` → `ground_s3.json`: 64 m hücre ızgarası; sınıflar OSM'den (deniz kıyı çizgisiyle
+  bölünen, içinden yol geçmeyen parça → boş). Yola 60 m'den yakın hücrede ağaç yok. Sütunlarda aynı sınıflı
+  hücreler tek parça: 2.174 parça → 2.572 Terrain öğesi (≤ 300 m segment, StepSize 16 m, y = -0,25).
+- `mapping.json` → `ground.classes`: malzeme (`terrain_mat.<n>`) ve bitki örtüsü (`veg.v2_*`, yoğunluk).
+- Editör çökmeden açıldı (overflow yok), Recompute + kayıt; oyunda çim, kentsel zemin, ağaç ve çalılar görünüyor
+  (`docs/img/ingame_ground_trees.jpg`).
+- Not: Bilgisayar yeniden başladıktan sonra Steam başlatma-seçenekleri penceresi açılıp exe'yi kapatıyordu (kod 53).
+  Çözüm: `...\bin\win_x64\steam_appid.txt` (içerik `227300`) – silinerek geri alınır.

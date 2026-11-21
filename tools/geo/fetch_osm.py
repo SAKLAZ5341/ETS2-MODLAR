@@ -118,6 +118,14 @@ out tags geom;""",
         "places": f"""[out:json][timeout:120][bbox:{bb}];
 (node["place"~"^(city|town|suburb|quarter|neighbourhood|village|hamlet)$"];);
 out tags geom;""",
+        "nature": f"""[out:json][timeout:300][bbox:{bb}];
+(way["landuse"~"^(forest|farmland|meadow|grass|orchard|vineyard|recreation_ground|cemetery|allotments|village_green|greenfield|quarry|construction|brownfield)$"];
+ rel["landuse"~"^(forest|farmland|meadow|grass|orchard|vineyard)$"];
+ way["natural"~"^(wood|scrub|grassland|heath|water|wetland|beach|sand|bare_rock)$"];
+ rel["natural"~"^(wood|scrub|water)$"];
+ way["leisure"~"^(park|garden|golf_course|pitch|nature_reserve)$"];
+ way["waterway"~"^(river|stream|canal)$"];);
+out tags geom;""",
         "rail_coast": f"""[out:json][timeout:180][bbox:{bb}];
 (way["railway"~"^(rail|light_rail|subway)$"];way["natural"="coastline"];node["railway"="station"];);
 out tags geom;""",

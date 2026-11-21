@@ -363,12 +363,15 @@ internal static class Program
         // 3) binalar (map_export'tan, place=true olanlar)
         int buildings = AddBuildings(map, cfg, Path.Combine(Root, exportRel), new Vector3(off.X, 0, off.Y));
 
+        // 4) zemin: ground_s3.json sütun parçaları → Terrain öğeleri (yolların biraz altında)
+        int ground = AddGround(map, cfg, Path.Combine(Root, "data", "processed", "ground_s3.json"), new Vector3(off.X, 0, off.Y));
+
         var outDir = cfg.GetProperty("output_map_dir").GetString();
         var name = cfg.GetProperty("output_map_name").GetString();
         if (name == "saklaz" || name == "europe") throw new InvalidOperationException("Korumalı ad.");
         map.Save(outDir, name, true);
         Console.WriteLine("Prefab dağılımı: " + string.Join(", ", byToken.Select(kv => $"{kv.Key}={kv.Value}")));
-        Console.WriteLine($"Kaydedildi: {name}.mbd  kavşak={placed} (reddedilen {rejected})  yol={roads} segment={segs} bağlantı={connected} atlanan={skipped} bina={buildings}");
+        Console.WriteLine($"Kaydedildi: {name}.mbd  kavşak={placed} (reddedilen {rejected})  yol={roads} segment={segs} bağlantı={connected} atlanan={skipped} bina={buildings} zemin={ground}");
         return 0;
     }
 
@@ -415,6 +418,55 @@ internal static class Program
         if (best.edge < 0) { Console.WriteLine("Başlangıç: uygun yol bulunamadı, kaydırma yok."); return Vector2.Zero; }
         Console.WriteLine($"Başlangıç: kenar {best.edge} ({typeOf[best.edge]}), eski konum ({best.mid.X:F1}, {best.mid.Y:F1}) → (0,0)");
         return -best.mid;
+    }
+
+    static int AddGround(Map map, JsonElement cfg, string groundPath, Vector3 off)
+    {
+        if (!File.Exists(groundPath) || !cfg.TryGetProperty("ground", out var g)) return 0;
+        var ground = JsonDocument.Parse(File.ReadAllText(groundPath)).RootElement;
+        float half = (float)ground.GetProperty("meta").GetProperty("cell").GetDouble() / 2f;
+        float y = (float)g.GetProperty("y").GetDouble();
+        float maxSeg = (float)g.GetProperty("max_segment").GetDouble();
+        var classes = g.GetProperty("classes");
+        int n = 0, bad = 0;
+
+        foreach (var r in ground.GetProperty("runs").EnumerateArray())
+        {
+            var cls = r.GetProperty("cls").GetString();
+            if (!classes.TryGetProperty(cls, out var cc)) continue;
+            bool trees = r.GetProperty("trees").GetBoolean();
+            float x = (float)r.GetProperty("x").GetDouble(), z0 = (float)r.GetProperty("z0").GetDouble(), z1 = (float)r.GetProperty("z1").GetDouble();
+            // -Z yönünde ilerle (z1 → z0): sol taraf -X, sağ taraf +X
+            int segs = Math.Max(1, (int)MathF.Ceiling((z1 - z0) / maxSeg));
+            try
+            {
+                var mat = cc.GetProperty("material").GetString();
+                var t = Terrain.Add(map, off + new Vector3(x, y, z1), off + new Vector3(x, y, z1 - (z1 - z0) / segs), mat, half, half);
+                var items = new List<Terrain> { t };
+                for (int k = 2; k <= segs; k++) { t = t.Append(off + new Vector3(x, y, z1 - (z1 - z0) * k / segs), mat, half, half); items.Add(t); }
+                foreach (var it in items)
+                {
+                    it.StepSize = StepSize.Meters16;
+                    it.Collision = true;
+                    foreach (var side in new[] { it.Left, it.Right })
+                    {
+                        side.Terrain.Noise = TerrainNoise.Percent0;
+                        if (trees && cc.TryGetProperty("vegetation", out var veg))
+                        {
+                            side.Vegetation[0].Name = veg.GetString();
+                            side.Vegetation[0].Density = (float)cc.GetProperty("density").GetDouble();
+                            side.Vegetation[0].Scale = VegetationScale.Percent80to120;
+                            side.Vegetation[0].From = 0;
+                            side.Vegetation[0].To = half;
+                        }
+                        side.DetailVegetation = cls is "grass" or "park" or "farm" or "forest" or "scrub";
+                    }
+                }
+                n += items.Count;
+            }
+            catch (Exception ex) { if (bad++ < 5) Console.WriteLine($"zemin atlandı: {ex.Message}"); }
+        }
+        return n;
     }
 
     static int AddBuildings(Map map, JsonElement cfg, string exportPath, Vector3 off)

@@ -12,7 +12,11 @@
     "r1_city_narrow": "ger1",
     "service": "ger1"
   },
-  "terrain_size": { "hw3_divided": 10, "r2_divided": 6, "default": 0 },
+  "terrain_size": {
+    "hw3_divided": 10,
+    "r2_divided": 6,
+    "default": 0
+  },
   "buildings": {
     "_doc": "Biçim model|variantlar|lookler. Adlar 'modelinfo' ile .pmd'den okundu. 0700b = block of flats 01 de; 3q001 = village close 08 de; 3z001 = warehouse 01 de",
     "mode": "model",
@@ -24,16 +28,111 @@
   "junctions": {
     "_doc": "prefabinfo ile doğrulandı. classes = .ppd düğüm sırasıyla kolun yol sınıfı (r1 kolu 18 m, r2 kolu 23,25 m).",
     "prefabs": [
-      { "token": "mod_ger_67", "ppd": "/prefab2/cross_temp/ger/ger_r1_x_r1_t_narrow_tmpl.ppd", "classes": ["r1", "r1", "r1"] },
-      { "token": "mod_ger_63", "ppd": "/prefab2/cross_temp/ger/ger_r1_x_r1_narrow_tmpl.ppd", "classes": ["r1", "r1", "r1", "r1"] },
-      { "token": "mod_ger_75", "ppd": "/prefab2/cross_temp/ger/ger_r2_x_r1_t_narrow_tmpl.ppd", "classes": ["r2", "r1", "r2"] },
-      { "token": "mod_ger_72", "ppd": "/prefab2/cross_temp/ger/ger_r1_x_r2_t_narrow_tmpl.ppd", "classes": ["r1", "r2", "r1"] },
-      { "token": "mod_ger_88", "ppd": "/prefab2/cross_temp/ger/ger_r2_x_r2_t_narrow_tmpl.ppd", "classes": ["r2", "r2", "r2"] },
-      { "token": "mod_ger_53", "ppd": "/prefab2/cross_temp/ger/ger_r2_x_r2_narrow_tmpl.ppd", "classes": ["r2", "r2", "r2", "r2"] }
+      {
+        "token": "mod_ger_67",
+        "ppd": "/prefab2/cross_temp/ger/ger_r1_x_r1_t_narrow_tmpl.ppd",
+        "classes": [
+          "r1",
+          "r1",
+          "r1"
+        ]
+      },
+      {
+        "token": "mod_ger_63",
+        "ppd": "/prefab2/cross_temp/ger/ger_r1_x_r1_narrow_tmpl.ppd",
+        "classes": [
+          "r1",
+          "r1",
+          "r1",
+          "r1"
+        ]
+      },
+      {
+        "token": "mod_ger_75",
+        "ppd": "/prefab2/cross_temp/ger/ger_r2_x_r1_t_narrow_tmpl.ppd",
+        "classes": [
+          "r2",
+          "r1",
+          "r2"
+        ]
+      },
+      {
+        "token": "mod_ger_72",
+        "ppd": "/prefab2/cross_temp/ger/ger_r1_x_r2_t_narrow_tmpl.ppd",
+        "classes": [
+          "r1",
+          "r2",
+          "r1"
+        ]
+      },
+      {
+        "token": "mod_ger_88",
+        "ppd": "/prefab2/cross_temp/ger/ger_r2_x_r2_t_narrow_tmpl.ppd",
+        "classes": [
+          "r2",
+          "r2",
+          "r2"
+        ]
+      },
+      {
+        "token": "mod_ger_53",
+        "ppd": "/prefab2/cross_temp/ger/ger_r2_x_r2_narrow_tmpl.ppd",
+        "classes": [
+          "r2",
+          "r2",
+          "r2",
+          "r2"
+        ]
+      }
     ],
     "look": "ger_1",
     "variant": "clean",
     "max_angle_error_deg": 40
   },
-  "limits": { "max_roads": 0, "max_buildings": 0 }
+  "limits": {
+    "max_roads": 0,
+    "max_buildings": 0
+  },
+  "ground": {
+    "_doc": "tools/geo/build_ground.py hücre sınıfları → arazi malzemesi (def/world/terrain_material.sii terrain_mat.<n>) ve bitki örtüsü (def/world/vegetation.sii veg.<ad>). Deniz boş bırakılır.",
+    "y": -0.25,
+    "max_segment": 300,
+    "classes": {
+      "grass": {
+        "material": "34",
+        "vegetation": "v2_16",
+        "density": 60
+      },
+      "park": {
+        "material": "82",
+        "vegetation": "v2_14",
+        "density": 120
+      },
+      "forest": {
+        "material": "18",
+        "vegetation": "v2_13",
+        "density": 400
+      },
+      "scrub": {
+        "material": "38",
+        "vegetation": "v2_22",
+        "density": 200
+      },
+      "farm": {
+        "material": "80"
+      },
+      "urban": {
+        "material": "24"
+      },
+      "bare": {
+        "material": "0"
+      },
+      "sand": {
+        "material": "3"
+      },
+      "water": {
+        "material": "7"
+      }
+    }
+  }
 }
