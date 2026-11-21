@@ -1,0 +1,6 @@
+city_data : city.cayirova
+{
+	city_name: "Çayırova"
+	country: turkey
+	population: 150000
+}

@@ -1,0 +1,6 @@
+city_data : city.darica
+{
+	city_name: "Darıca"
+	country: turkey
+	population: 220000
+}

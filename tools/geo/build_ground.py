@@ -1,13 +1,13 @@
-"""SAKLAZ TÃ¼rkiye Map - zemin (arazi + bitki Ã¶rtÃ¼sÃ¼) Ä±zgarasÄ± Ã¼retir: data/processed/ground_s<scale>.json
+"""SAKLAZ Türkiye Map - zemin (arazi + bitki örtüsü) ızgarası üretir: data/processed/ground_s<scale>.json
 
-KullanÄ±m:
+Kullanım:
     .venv\\Scripts\\python.exe -I tools\\geo\\build_ground.py [--scale 3] [--cell 64]
 
-Alan, oyun koordinatÄ±nda kare hÃ¼crelere bÃ¶lÃ¼nÃ¼r. Her hÃ¼creye OSM verisinden bir sÄ±nÄ±f atanÄ±r:
-  sea (deniz; boÅŸ bÄ±rakÄ±lÄ±r), water, forest, scrub, park, farm, urban, grass.
-Yola yakÄ±n hÃ¼crelerde aÄŸaÃ§ yoktur (aÄŸaÃ§lar yollarÄ± delmesin). Sonra her sÃ¼tunda aynÄ± sÄ±nÄ±ftaki ardÄ±ÅŸÄ±k
-hÃ¼creler tek parÃ§aya ("run") birleÅŸtirilir; tools/mapgen her parÃ§ayÄ± bir Terrain Ã¶ÄŸesi olarak koyar.
-Veri Â© OpenStreetMap katkÄ±da bulunanlar, ODbL 1.0.
+Alan, oyun koordinatında kare hücrelere bölünür. Her hücreye OSM verisinden bir sınıf atanır:
+  sea (deniz; boş bırakılır), water, forest, scrub, park, farm, urban, grass.
+Yola yakın hücrelerde ağaç yoktur (ağaçlar yolları delmesin). Sonra her sütunda aynı sınıftaki ardışık
+hücreler tek parçaya ("run") birleştirilir; tools/mapgen her parçayı bir Terrain öğesi olarak koyar.
+Veri © OpenStreetMap katkıda bulunanlar, ODbL 1.0.
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[2]
 RAW = ROOT / "data" / "raw"
 OUT = ROOT / "data" / "processed"
 T = Transformer.from_crs("EPSG:4326", "EPSG:32635", always_xy=True)
-E0, N0 = 705139.33, 4519475.38  # Gebze OSM dÃ¼ÄŸÃ¼mÃ¼ 26505108 (build_city_graph.py ile aynÄ±)
+E0, N0 = 705139.33, 4519475.38  # Gebze OSM düğümü 26505108 (build_city_graph.py ile aynı)
 
 NATURE = {
     ("landuse", "forest"): "forest", ("natural", "wood"): "forest",
@@ -41,17 +41,17 @@ NATURE = {
     ("landuse", "quarry"): "bare", ("natural", "bare_rock"): "bare", ("landuse", "construction"): "bare",
     ("landuse", "brownfield"): "bare",
 }
-# Ã¶ncelik: aynÄ± hÃ¼crede birden Ã§ok sÄ±nÄ±f varsa bÃ¼yÃ¼k olan kazanÄ±r
+# öncelik: aynı hücrede birden çok sınıf varsa büyük olan kazanır
 PRIO = {"water": 9, "forest": 7, "scrub": 6, "park": 5, "sand": 5, "bare": 4, "farm": 3, "urban": 2, "grass": 1}
 
 
 def proj(lon, lat, scale):
     e, n = T.transform(lon, lat)
-    return ((e - E0) / scale, -(n - N0) / scale)  # +X doÄŸu, +Z gÃ¼ney
+    return ((e - E0) / scale, -(n - N0) / scale)  # +X doğu, +Z güney
 
 
 def geom_polys(el, scale):
-    """Overpass Ã¶ÄŸesinden kapalÄ± poligonlar."""
+    """Overpass öğesinden kapalı poligonlar."""
     out = []
     if el["type"] == "way" and "geometry" in el:
         pts = [proj(g["lon"], g["lat"], scale) for g in el["geometry"]]
@@ -71,8 +71,8 @@ def geom_polys(el, scale):
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--scale", type=float, default=3.0)
-    ap.add_argument("--cell", type=float, default=96.0, help="hÃ¼cre kenarÄ± (oyun m)")
-    ap.add_argument("--margin", type=float, default=300.0, help="yol aÄŸÄ±nÄ±n dÄ±ÅŸÄ±na taÅŸma (oyun m)")
+    ap.add_argument("--cell", type=float, default=96.0, help="hücre kenarı (oyun m)")
+    ap.add_argument("--margin", type=float, default=300.0, help="yol ağının dışına taşma (oyun m)")
     a = ap.parse_args()
     s = int(a.scale)
 
@@ -85,7 +85,7 @@ def main() -> None:
     road_tree = STRtree(lines)
     area = box(x0, z0, x1, z1)
 
-    # 1) sÄ±nÄ±f poligonlarÄ±
+    # 1) sınıf poligonları
     polys: list[tuple[Polygon, str]] = []
     nature = json.loads((RAW / "nature.json").read_text(encoding="utf-8"))
     for el in nature["elements"]:
@@ -97,10 +97,10 @@ def main() -> None:
     for el in landuse["elements"]:
         if el.get("tags", {}).get("landuse") or el.get("tags", {}).get("industrial"):
             polys += [(p, "urban") for p in geom_polys(el, a.scale) if p.intersects(area)]
-    print("sÄ±nÄ±f poligonlarÄ±:", Counter(c for _, c in polys))
+    print("sınıf poligonları:", Counter(c for _, c in polys))
     ptree = STRtree([p for p, _ in polys])
 
-    # 2) deniz: kÄ±yÄ± Ã§izgileri alanÄ± bÃ¶ler; deniz noktasÄ± iÃ§eren parÃ§alar deniz
+    # 2) deniz: kıyı çizgileri alanı böler; deniz noktası içeren parçalar deniz
     coast = json.loads((RAW / "rail_coast.json").read_text(encoding="utf-8"))
     clines = [LineString([proj(g["lon"], g["lat"], a.scale) for g in el["geometry"]])
               for el in coast["elements"] if el.get("tags", {}).get("natural") == "coastline" and "geometry" in el]
@@ -109,13 +109,13 @@ def main() -> None:
         clipped = [l.intersection(area) for l in clines]
         clipped = [g for g in clipped if not g.is_empty]
         pieces = list(polygonize(unary_union(clipped + [area.exterior])))
-        # deniz parÃ§asÄ±: iÃ§inden en fazla 4 yol (iskele vb.) geÃ§en ve en az 0,5 kmÂ² olan parÃ§alar (yollar karadadÄ±r)
+        # deniz parçası: içinden en fazla 4 yol (iskele vb.) geçen ve en az 0,5 km² olan parçalar (yollar karadadır)
         sea_parts = [p for p in pieces if p.area > 5e5 and sum(1 for k in road_tree.query(p) if lines[k].intersects(p)) < 5]
-        print("kÄ±yÄ± parÃ§alarÄ±:", len(pieces), "deniz:", len(sea_parts))
+        print("kıyı parçaları:", len(pieces), "deniz:", len(sea_parts))
         sea = unary_union(sea_parts) if sea_parts else None
-    print("deniz alanÄ± (kmÂ² oyun):", round(sea.area / 1e6, 2) if sea is not None else 0)
+    print("deniz alanı (km² oyun):", round(sea.area / 1e6, 2) if sea is not None else 0)
 
-    # 3) hÃ¼cre sÄ±nÄ±flandÄ±rmasÄ±
+    # 3) hücre sınıflandırması
     C = a.cell
     nx, nz = int((x1 - x0) // C) + 1, int((z1 - z0) // C) + 1
     grid = []
@@ -135,9 +135,9 @@ def main() -> None:
             near = min(lines[k].distance(pt) for k in road_tree.query(pt.buffer(C * 1.5))) if len(road_tree.query(pt.buffer(C * 1.5))) else 1e9
             col.append((best, near))
         grid.append(col)
-    print("hÃ¼cre:", nx, "x", nz, Counter(c for col in grid for c, _ in col))
+    print("hücre:", nx, "x", nz, Counter(c for col in grid for c, _ in col))
 
-    # 4) sÃ¼tun parÃ§alarÄ±: (sÄ±nÄ±f, aÄŸaÃ§lÄ± mÄ±) aynÄ± olan ardÄ±ÅŸÄ±k hÃ¼creler
+    # 4) sütun parçaları: (sınıf, ağaçlı mı) aynı olan ardışık hücreler
     def key(c, near):
         if c == "sea":
             return None
@@ -159,7 +159,7 @@ def main() -> None:
     meta = {"scale_divisor": a.scale, "cell": C, "bbox": [x0, z0, x1, z1],
             "attribution": "(c) OpenStreetMap contributors, ODbL 1.0"}
     (OUT / f"ground_s{s}.json").write_text(json.dumps({"meta": meta, "runs": runs}, ensure_ascii=False), encoding="utf-8")
-    print("parÃ§a:", len(runs), Counter((r["cls"], r["trees"]) for r in runs).most_common(12))
+    print("parça:", len(runs), Counter((r["cls"], r["trees"]) for r in runs).most_common(12))
 
 
 if __name__ == "__main__":

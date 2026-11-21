@@ -1,15 +1,15 @@
-"""SAKLAZ TÃ¼rkiye Map - kavÅŸaklÄ± ÅŸehir aÄŸÄ± (map_graph_s<scale>.json) Ã¼retir.
+"""SAKLAZ Türkiye Map - kavşaklı şehir ağı (map_graph_s<scale>.json) üretir.
 
-KullanÄ±m:
+Kullanım:
     .venv\\Scripts\\python.exe -I tools\\geo\\build_city_graph.py [--scale 3]
 
-build_city_export.py'den farkÄ±: yollar Ã¶nce GERÃ‡EK OSM kesiÅŸim noktalarÄ±ndan bÃ¶lÃ¼nÃ¼r, sonra her parÃ§a
-ayrÄ± sadeleÅŸtirilir; bÃ¶ylece kavÅŸak noktalarÄ± korunur. Ã‡Ä±ktÄ±:
-  edges     : kavÅŸaktan kavÅŸaÄŸa yol parÃ§alarÄ± (oyun koordinatÄ±), uÃ§larÄ±nda dÃ¼ÄŸÃ¼m kimliÄŸi
-  junctions : prefab adaylarÄ± (yalnÄ±zca ÅŸehir yollarÄ±, 3-4 kol, kollar yeterince uzun, birbirinden uzak)
-              her kol iÃ§in kenar kimliÄŸi, hangi uÃ§ ve Ã§Ä±kÄ±ÅŸ yÃ¶nÃ¼ (birim vektÃ¶r)
-Prefab seÃ§imi/dÃ¶ndÃ¼rme tools/mapgen (C#) tarafÄ±nda, .ppd dÃ¼ÄŸÃ¼mlerine gÃ¶re yapÄ±lÄ±r.
-Veri Â© OpenStreetMap katkÄ±da bulunanlar, ODbL 1.0.
+build_city_export.py'den farkı: yollar önce GERÇEK OSM kesişim noktalarından bölünür, sonra her parça
+ayrı sadeleştirilir; böylece kavşak noktaları korunur. Çıktı:
+  edges     : kavşaktan kavşağa yol parçaları (oyun koordinatı), uçlarında düğüm kimliği
+  junctions : prefab adayları (yalnızca şehir yolları, 3-4 kol, kollar yeterince uzun, birbirinden uzak)
+              her kol için kenar kimliği, hangi uç ve çıkış yönü (birim vektör)
+Prefab seçimi/döndürme tools/mapgen (C#) tarafında, .ppd düğümlerine göre yapılır.
+Veri © OpenStreetMap katkıda bulunanlar, ODbL 1.0.
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[2]
 RAW = ROOT / "data" / "raw"
 CFG = json.loads((ROOT / "config" / "aoi.json").read_text(encoding="utf-8"))
 T = Transformer.from_crs("EPSG:4326", "EPSG:32635", always_xy=True)
-E0, N0 = 705139.33, 4519475.38  # Gebze OSM dÃ¼ÄŸÃ¼mÃ¼ 26505108
+E0, N0 = 705139.33, 4519475.38  # Gebze OSM düğümü 26505108
 
 ROADMAP = {
     "motorway": ("hw3_divided", 1), "trunk": ("hw3_divided", 2), "primary": ("r2_divided", 3),
@@ -40,7 +40,7 @@ ROADMAP = {
 CITY = {"r1_city", "r1_city_narrow"}
 R2 = {"r2_divided"}
 cls = lambda t: "r2" if t in R2 else ("r1" if t in CITY else None)
-# izin verilen (r1 sayÄ±sÄ±, r2 sayÄ±sÄ±) desenleri -> prefab var
+# izin verilen (r1 sayısı, r2 sayısı) desenleri -> prefab var
 PATTERNS = {(3, 0), (2, 1), (1, 2), (0, 3), (4, 0), (0, 4)}
 
 
@@ -50,16 +50,16 @@ def main() -> None:
     ap.add_argument("--simplify-m", type=float, default=10.0)
     ap.add_argument("--min-seg", type=float, default=8.0)
     ap.add_argument("--exclude", nargs="*", default=["service", "living_street"])
-    ap.add_argument("--prefab-radius", type=float, default=18.0, help="prefab merkez-dÃ¼ÄŸÃ¼m mesafesi (oyun m)")
-    ap.add_argument("--min-arm", type=float, default=24.0, help="kol baÅŸÄ±na en az kenar uzunluÄŸu (oyun m)")
+    ap.add_argument("--prefab-radius", type=float, default=18.0, help="prefab merkez-düğüm mesafesi (oyun m)")
+    ap.add_argument("--min-arm", type=float, default=24.0, help="kol başına en az kenar uzunluğu (oyun m)")
     ap.add_argument("--min-junction-gap", type=float, default=55.0)
-    ap.add_argument("--drop-deadend-len", type=float, default=60.0, help="bu uzunluktan kÄ±sa Ã§Ä±kmaz ara sokaklarÄ± at (oyun m; 0=kapalÄ±)")
+    ap.add_argument("--drop-deadend-len", type=float, default=60.0, help="bu uzunluktan kısa çıkmaz ara sokakları at (oyun m; 0=kapalı)")
     a = ap.parse_args()
     S = a.scale
     s, w, n, e = CFG["core_bbox_swne"]
     core = box(*T.transform(w, s), *T.transform(e, n))
 
-    # 1) yollarÄ± yÃ¼kle (UTM), kullanÄ±m sayÄ±sÄ±
+    # 1) yolları yükle (UTM), kullanım sayısı
     ways = []
     for wy in json.loads((RAW / "roads.json").read_text(encoding="utf-8"))["elements"]:
         t = wy.get("tags", {})
@@ -75,9 +75,9 @@ def main() -> None:
     use = Counter()
     for _, _, _, pts in ways:
         for i, p in enumerate(pts):
-            use[p] += 2 if i in (0, len(pts) - 1) else 1  # uÃ§lar her zaman bÃ¶lme noktasÄ±
+            use[p] += 2 if i in (0, len(pts) - 1) else 1  # uçlar her zaman bölme noktası
 
-    # 2) kesiÅŸimlerden bÃ¶l, Ã§ekirdek alana kÄ±rp, sadeleÅŸtir
+    # 2) kesişimlerden böl, çekirdek alana kırp, sadeleştir
     g = lambda x, y: (round((x - E0) / S, 3), round(-(y - N0) / S, 3))
     edges, node_id, nodes = [], {}, []
 
@@ -118,7 +118,7 @@ def main() -> None:
                           "reverse": t.get("oneway") == "-1", "a": nid(seg[0]), "b": nid(seg[-1]),
                           "len": round(L, 1), "pts": out})
 
-    # 3) dÃ¼ÄŸÃ¼m dereceleri ve kavÅŸak adaylarÄ±
+    # 3) düğüm dereceleri ve kavşak adayları
     inc = defaultdict(list)
     for ed in edges:
         inc[ed["a"]].append((ed, "a"))
@@ -151,7 +151,7 @@ def main() -> None:
             continue
         c = edges[lst[0][0]["id"]]["pts"][0] if lst[0][1] == "a" else lst[0][0]["pts"][-1]
         cand.append((min(ed["len"] for ed, _ in lst), k, c, lst))
-    cand.sort(key=lambda x: -x[0])  # en uzun kollu (en rahat) kavÅŸaklar Ã¶nce
+    cand.sort(key=lambda x: -x[0])  # en uzun kollu (en rahat) kavşaklar önce
     chosen, grid = [], defaultdict(list)
     G = a.min_junction_gap
     used_edges = Counter()
@@ -159,7 +159,7 @@ def main() -> None:
         key = (int(c[0] // G), int(c[1] // G))
         if any(math.dist(c, q) < G for dx in (-1, 0, 1) for dz in (-1, 0, 1) for q in grid[(key[0] + dx, key[1] + dz)]):
             continue
-        # aynÄ± kenarÄ±n iki ucunda prefab: kenar 2*yarÄ±Ã§ap + pay kadar uzun olmalÄ±
+        # aynı kenarın iki ucunda prefab: kenar 2*yarıçap + pay kadar uzun olmalı
         rad = 23.25 if any(cls(ed["type"]) == "r2" for ed, _ in lst) else a.prefab_radius
         if any(used_edges[ed["id"]] and ed["len"] < 2 * rad + 8 for ed, _ in lst):
             continue
@@ -169,12 +169,12 @@ def main() -> None:
         chosen.append({"id": len(chosen), "node": k, "x": c[0], "z": c[1], "arms":
                        [{"edge": ed["id"], "end": end, "cls": cls(ed["type"]), "dir": arm_dir(ed, end)} for ed, end in lst]})
 
-    # 4) Prefab konmayan kesiÅŸimlerde parÃ§alarÄ± aynÄ± OSM yolu boyunca yeniden birleÅŸtir
-    #    (editÃ¶r Ã¶ÄŸe sayÄ±sÄ± sÄ±nÄ±rÄ±: ~17 bin Ã¶ÄŸe Ã¼stÃ¼nde render taÅŸmasÄ±).
+    # 4) Prefab konmayan kesişimlerde parçaları aynı OSM yolu boyunca yeniden birleştir
+    #    (editör öğe sayısı sınırı: ~17 bin öğe üstünde render taşması).
     jnodes = {j["node"] for j in chosen}
     remap, merged = {}, []
     cur = None
-    for ed in edges:  # aynÄ± yolun parÃ§alarÄ± ardÄ±ÅŸÄ±k Ã¼retildi
+    for ed in edges:  # aynı yolun parçaları ardışık üretildi
         if cur and cur["osm"] == ed["osm"] and cur["b"] == ed["a"] and ed["a"] not in jnodes and cur["type"] == ed["type"]:
             cur["pts"].extend(ed["pts"][1:])
             cur["b"] = ed["b"]
@@ -193,11 +193,11 @@ def main() -> None:
         for arm in j["arms"]:
             m = remap[(arm["edge"], arm["end"])]
             arm["edge"] = m["id"]
-            # birleÅŸik kenarÄ±n hangi ucu bu kavÅŸakta
+            # birleşik kenarın hangi ucu bu kavşakta
             arm["end"] = "a" if m["a"] == j["node"] else "b"
     for m in merged:
         m.pop("_parts", None)
-        if len(m["pts"]) > 2:  # birleÅŸik kenarÄ± yeniden sadeleÅŸtir (uÃ§lar korunur)
+        if len(m["pts"]) > 2:  # birleşik kenarı yeniden sadeleştir (uçlar korunur)
             ls = LineString(m["pts"]).simplify(a.simplify_m / S)
             ps = [tuple(round(v, 3) for v in c) for c in ls.coords]
             o = [ps[0]]
@@ -208,7 +208,7 @@ def main() -> None:
             m["pts"] = [list(c) for c in o]
     edges = merged
 
-    # 4b) KÄ±sa Ã§Ä±kmaz sokaklarÄ± at (editÃ¶r Ã¶ÄŸe/segment sÄ±nÄ±rÄ±). KavÅŸak kolu olan kenarlar korunur.
+    # 4b) Kısa çıkmaz sokakları at (editör öğe/segment sınırı). Kavşak kolu olan kenarlar korunur.
     if a.drop_deadend_len > 0:
         deg = Counter()
         for ed in edges:
@@ -223,16 +223,17 @@ def main() -> None:
                 arm["edge"] = idmap[arm["edge"]]
         for i, ed in enumerate(keep):
             ed["id"] = i
-        print(f"kÄ±sa Ã§Ä±kmaz sokak atÄ±ldÄ±: {len(edges) - len(keep)}")
+        print(f"kısa çıkmaz sokak atıldı: {len(edges) - len(keep)}")
         edges = keep
 
-    # 5) Åirket depolarÄ±: sanayi alanlarÄ±nda, dÃ¼z ve uzun bir ÅŸehir yolu parÃ§asÄ±nÄ±n yanÄ±na iki dÃ¼ÄŸÃ¼mlÃ¼ depo
-    #    prefabÄ±. ParÃ§a ikiye bÃ¶lÃ¼nÃ¼r; depo dÃ¼ÄŸÃ¼mleri iki yeni kenar ucuna gelir.
+    # 5) Şirket depoları: sanayi alanlarında, düz ve uzun bir şehir yolu parçasının yanına iki düğümlü depo
+    #    prefabı. Parça ikiye bölünür; depo düğümleri iki yeni kenar ucuna gelir.
     depots = place_depots(edges, chosen, S, a)
+    cities = assign_cities(depots, edges, S)
 
-    out = {"meta": {"scale_divisor": S, "origin_osm_node": 26505108, "axes": "+X doÄŸu, +Z gÃ¼ney, Y=0",
+    out = {"meta": {"scale_divisor": S, "origin_osm_node": 26505108, "axes": "+X doğu, +Z güney, Y=0",
                     "prefab_radius": a.prefab_radius, "attribution": "(c) OpenStreetMap contributors, ODbL 1.0"},
-           "edges": edges, "junctions": chosen, "depots": depots}
+           "edges": edges, "junctions": chosen, "depots": depots, "cities": cities}
     dst = ROOT / "data" / "processed" / f"map_graph_s{S:g}.json"
     dst.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
     deg = Counter(len(v) for v in inc.values())
@@ -247,7 +248,42 @@ def main() -> None:
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
-# Depo prefablarÄ± (ana oyun, Avusturya seti): dÃ¼ÄŸÃ¼m0 â†’ dÃ¼ÄŸÃ¼m1 aralÄ±ÄŸÄ± (oyun m). Åirketler sÄ±rayla daÄŸÄ±tÄ±lÄ±r.
+CITY_TOKENS = {"Gebze": "gebze", "Darıca": "darica", "Çayırova": "cayirova", "Dilovası": "dilovasi"}
+
+
+def assign_cities(depots, edges, S):
+    """İlçe sınırlarından (OSM admin_level 6) şehir alanları; her depoya bulunduğu ilçenin şehri atanır.
+    Şehir alanı = ilçe poligonunun yol ağı kutusuyla kesişiminin sınır kutusu (oyun koordinatı)."""
+    from shapely.geometry import Point, box as sbox
+    from shapely.ops import polygonize, unary_union
+    g = lambda x, y: ((x - E0) / S, -(y - N0) / S)
+    xs = [p[0] for e in edges for p in e["pts"]]
+    zs = [p[1] for e in edges for p in e["pts"]]
+    net = sbox(min(xs), min(zs), max(xs), max(zs))
+    polys = {}
+    for el in json.loads((RAW / "districts.json").read_text(encoding="utf-8"))["elements"]:
+        tok = CITY_TOKENS.get(el.get("tags", {}).get("name"))
+        if not tok:
+            continue
+        lines = [LineString([g(*T.transform(q["lon"], q["lat"])) for q in m["geometry"]])
+                 for m in el.get("members", []) if m.get("role") == "outer" and "geometry" in m]
+        polys[tok] = (el["tags"]["name"], unary_union(list(polygonize(unary_union(lines)))))
+    cities = []
+    for tok, (name, poly) in polys.items():
+        part = poly.intersection(net)
+        if part.is_empty:
+            continue
+        x0, z0, x1, z1 = part.bounds
+        rp = part.representative_point()
+        cities.append({"token": tok, "name": name, "x0": round(x0, 1), "z0": round(z0, 1),
+                       "x1": round(x1, 1), "z1": round(z1, 1), "cx": round(rp.x, 1), "cz": round(rp.y, 1)})
+    for d in depots:
+        pt = Point(d["body"])
+        d["city"] = next((t for t, (_, poly) in polys.items() if poly.contains(pt)), "gebze")
+    return cities
+
+
+# Depo prefabları (ana oyun, Avusturya seti): düğüm0 → düğüm1 aralığı (oyun m). Şirketler sırayla dağıtılır.
 DEPOT_TYPES = [
     {"company": "stokes", "kind": "generic", "span": 100.0},
     {"company": "lkwlog", "kind": "logistic", "span": 80.0},
@@ -259,7 +295,7 @@ DEPOT_TYPES = [
 
 
 def place_depots(edges, chosen, S, a, max_depots=len(DEPOT_TYPES), min_gap=300.0, clear=45.0):
-    """Sanayi poligonu iÃ§indeki uzun dÃ¼z parÃ§alara depo yerleÅŸtirir; edges listesini yerinde bÃ¶ler."""
+    """Sanayi poligonu içindeki uzun düz parçalara depo yerleştirir; edges listesini yerinde böler."""
     from shapely.geometry import Point, Polygon
     from shapely.strtree import STRtree
 
@@ -301,7 +337,7 @@ def place_depots(edges, chosen, S, a, max_depots=len(DEPOT_TYPES), min_gap=300.0
                 continue
             ux, uz = (Q[0] - P[0]) / L, (Q[1] - P[1]) / L
             side = None
-            for sgn in (1, -1):  # yolun saÄŸÄ±/solu: depo gÃ¶vdesi ~55 m iÃ§eride
+            for sgn in (1, -1):  # yolun sağı/solu: depo gövdesi ~55 m içeride
                 nx, nz = -uz * sgn, ux * sgn
                 body = Point(mid[0] + nx * 60, mid[1] + nz * 60)
                 near = [q for q in ltree.query(body.buffer(clear)) if q != ed["id"] and lines[q].distance(body) < clear]
@@ -313,7 +349,7 @@ def place_depots(edges, chosen, S, a, max_depots=len(DEPOT_TYPES), min_gap=300.0
             h = typ["span"] / 2
             n0 = (round(mid[0] - ux * h, 3), round(mid[1] - uz * h, 3))
             n1 = (round(mid[0] + ux * h, 3), round(mid[1] + uz * h, 3))
-            # kenarÄ± bÃ¶l: A = baÅŸ..n0, B = n1..son
+            # kenarı böl: A = baş..n0, B = n1..son
             ida, idb = next_node, next_node + 1
             next_node += 2
             B = dict(ed, id=len(edges), a=idb, pts=[list(n1)] + [list(p) for p in pts[i + 1:]])
@@ -321,7 +357,7 @@ def place_depots(edges, chosen, S, a, max_depots=len(DEPOT_TYPES), min_gap=300.0
             ed["b"] = ida
             for e2 in (ed, B):
                 e2["len"] = round(sum(math.dist(p, q) for p, q in zip(e2["pts"], e2["pts"][1:])), 1)
-            # B, eski kenarÄ±n b ucundaki kavÅŸak kolunu devralÄ±r
+            # B, eski kenarın b ucundaki kavşak kolunu devralır
             for j in chosen:
                 for arm in j["arms"]:
                     if arm["edge"] == ed["id"] and arm["end"] == "b":

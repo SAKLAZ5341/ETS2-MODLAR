@@ -359,7 +359,7 @@ internal static class Program
                     var co = Company.Add(map, pf, best.origin);
                     noBuild.Add((best.origin, 75f));
                     co.CompanyName = company;
-                    co.CityName = city;
+                    co.CityName = d.TryGetProperty("city", out var dc) ? dc.GetString() : city;
                     foreach (var sp in ppd.SpawnPoints)
                     {
                         var (dt, diff) = sp.Type switch
@@ -378,12 +378,16 @@ internal static class Program
                 }
                 catch (Exception ex) { Console.WriteLine($"depo {d.GetProperty("id")} atlandı: {ex.Message}"); }
             }
-            if (dcfg.GetProperty("city_area").GetBoolean())
+            if (dcfg.GetProperty("city_area").GetBoolean() && graph.TryGetProperty("cities", out var clist))
             {
-                var xs = graph.GetProperty("edges").EnumerateArray().SelectMany(e => e.GetProperty("pts").EnumerateArray()).Select(p => (x: p[0].GetDouble(), z: p[1].GetDouble())).ToList();
-                var lo = V(xs.Min(p => p.x), xs.Min(p => p.z)); var hi = V(xs.Max(p => p.x), xs.Max(p => p.z));
-                var ca = CityArea.Add(map, lo, city, hi.X - lo.X, hi.Z - lo.Z);
-                ca.ShowInUi = true;
+                // CityArea konumu alanın MERKEZİ (oyunda doğrulandı: köşe sanılınca doğu yarısı dışarıda kalıyordu)
+                foreach (var c in clist.EnumerateArray())
+                {
+                    double x0 = c.GetProperty("x0").GetDouble(), x1 = c.GetProperty("x1").GetDouble();
+                    double z0 = c.GetProperty("z0").GetDouble(), z1 = c.GetProperty("z1").GetDouble();
+                    var ca = CityArea.Add(map, V((x0 + x1) / 2, (z0 + z1) / 2), c.GetProperty("token").GetString(), (float)(x1 - x0), (float)(z1 - z0));
+                    ca.ShowInUi = true;
+                }
             }
         }
 

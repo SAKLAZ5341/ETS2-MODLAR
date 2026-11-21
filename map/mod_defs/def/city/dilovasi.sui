@@ -1,0 +1,6 @@
+city_data : city.dilovasi
+{
+	city_name: "Dilovası"
+	country: turkey
+	population: 50000
+}
