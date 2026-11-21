@@ -73,6 +73,7 @@ def main() -> None:
     ap.add_argument("--scale", type=float, default=3.0)
     ap.add_argument("--cell", type=float, default=96.0, help="hücre kenarı (oyun m)")
     ap.add_argument("--margin", type=float, default=300.0, help="yol ağının dışına taşma (oyun m)")
+    ap.add_argument("--smooth", type=int, default=2, help="çoğunluk filtresi tekrar sayısı")
     a = ap.parse_args()
     s = int(a.scale)
 
@@ -135,6 +136,20 @@ def main() -> None:
             near = min(lines[k].distance(pt) for k in road_tree.query(pt.buffer(C * 1.5))) if len(road_tree.query(pt.buffer(C * 1.5))) else 1e9
             col.append((best, near))
         grid.append(col)
+    # çoğunluk filtresi: tek başına kalan hücreleri komşularına uydur (daha doğal sınırlar, daha az parça)
+    for _ in range(a.smooth):
+        g2 = [list(col) for col in grid]
+        for i in range(nx):
+            for j in range(nz):
+                c, near = grid[i][j]
+                if c == "sea":
+                    continue
+                nb = Counter(grid[i + di][j + dj][0] for di in (-1, 0, 1) for dj in (-1, 0, 1)
+                             if 0 <= i + di < nx and 0 <= j + dj < nz and grid[i + di][j + dj][0] != "sea")
+                top, n = nb.most_common(1)[0]
+                if top != c and n >= 5 and c != "water":
+                    g2[i][j] = (top, near)
+        grid = g2
     print("hücre:", nx, "x", nz, Counter(c for col in grid for c, _ in col))
 
     # 4) sütun parçaları: (sınıf, ağaçlı mı) aynı olan ardışık hücreler
