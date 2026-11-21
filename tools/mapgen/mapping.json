@@ -22,26 +22,19 @@
     "mode": "model",
     "small_house": [
       "dlc_blke_3|default|default",
-      "dlc_blke_9|var_1,var_old|default",
-      "dlc_blke_20|var_1,var_2,var_3|default",
-      "dlc_blke_4|default|default",
-      "dlc_blke_13|var_new,var_old|default",
-      "dlc_blke_31|var_1,var_2,var_3|default",
-      "dlc_blke_39|new,old|default"
+      "dlc_blke_9|var_1|default",
+      "dlc_blke_20|var_1,var_2|default",
+      "dlc_blke_13|var_new|default",
+      "dlc_blke_31|var_1|default",
+      "dlc_blke_39|new|default"
     ],
     "apartment": [
       "dlc_blke_37|corner,center|default",
-      "dlc_blke_41|plaster,mosaic|default",
-      "dlc_blke_45|original,mozaik|default",
-      "blkw_0x004|tall1,tall2,tall3,tall4,short1,short2|default,look2,look3,look4,look5",
-      "blkw_0x00e|v1,v2,v3|plstr,plstrwhite,brick",
-      "blkw_0v00b|all|original,green,pinkbrown,redwhite"
+      "dlc_blke_41|plaster|default",
+      "dlc_blke_45|original|default"
     ],
     "commercial": [
-      "blkw_2f007|default,brand_2,brand_3,brand_4,brand_5,brand_6|brand_1",
-      "blkw_0x005|default|default",
-      "blkw_0v00c|default|default,light_blue,grey,dark_green,white",
-      "dlc_blke_53|var1,var2|default,company2",
+      "dlc_blke_53|var1|default",
       "dlc_blke_47|all|default"
     ],
     "industrial": [
