@@ -76,3 +76,21 @@ ile programatik üretim. TruckLib 0.5.3, harita sürümü 907'yi (ETS2 1.59–1.
 - Bilinen: yüklemede "Terrain point count doesn't match" uyarıları (prefab arazisi, TruckLib'in prefab
   desteği "deneysel"); yeniden hesaplama sonrası editör kaydıyla yazıldı. Ana yollar (D-100, TEM, birincil)
   ile ara sokak kesişimleri ve sık aralıklı kesişimler henüz prefabsız.
+
+## 8. Ana cadde (r2) kavşakları ve oyun içi test – 2026-11-21 13:40
+
+- Kavşak seçimi sınıf kurallı: her kol r1 (şehir) ya da r2 (ana cadde, `r2_divided`) sınıfında; izinli
+  desenler T için (3,0) (2,1) (1,2) (0,3), dörtlü için (4,0) (0,4). r2 kolu olan kavşakta yarıçap 23,25 m.
+- Prefablar (`mapping.json` → `junctions.prefabs`, `.ppd` düğüm sırasıyla kol sınıfı):
+  `mod_ger_67` r1 T, `mod_ger_63` r1 X, `mod_ger_75` r2×r1 T, `mod_ger_72` r1×r2 T, `mod_ger_88` r2 T,
+  `mod_ger_53` r2 X. `r2_divided` yol tipi `ger7` (ger road 2 city narrow) yapıldı.
+- Sonuç: 436 aday → **348 kavşak** (mod_ger_67=276, mod_ger_75=40, mod_ger_63=32), 88 reddedildi.
+- Arazi: şehir yollarına arazi (terrain_size > 0) verilince editör "Parameter packet batch system overflow"
+  ile çöküyor. Şimdilik `terrain_size = { hw3_divided: 10, r2_divided: 6, default: 0 }`.
+- Editörde açıldı, *Recompute map* + kayıt yapıldı; yedek `D:\SAKLAZ_DEV\backups\saklaz_city_r2junc_*`.
+- **Oyun içi önizleme** (`eurotrucks2.exe -preview /map/saklaz_city.mbd -previewconfig /preview_config/default.cfg`):
+  harita 12 sn'de yüklendi, tır (0,0,0)'a yerleşti, oyun çökmedi. Görüntü: `docs/img/ingame_preview_r2junc.jpg`.
+- **Uyarı:** 13:06'da editör ve oyun önizlemesi aynı anda açıkken bilgisayar aniden kapandı (Kernel-Power 41,
+  hata kodu yok → donma/güç kesintisi). Önizlemeyi **editör kapalıyken tek başına** çalıştırmak sorunsuz oldu.
+- Eksikler: (0,0,0) yol üstünde değil, tır toprak tümseğe doğuyor → başlangıç noktası/şirket gerekli;
+  merkezde üst üste binen paralel yollar var; D-100/TEM kavşakları ve sık kesişimler hâlâ prefabsız.
