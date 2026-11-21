@@ -280,6 +280,13 @@ def assign_cities(depots, edges, S):
     for d in depots:
         pt = Point(d["body"])
         d["city"] = next((t for t, (_, poly) in polys.items() if poly.contains(pt)), "gebze")
+    # Oyunda doğrulanan şirketler (lkwlog/posped "assignment" hatası veriyor). Bir şehirde her şirket en fazla bir kez.
+    pool = ["stokes", "tradeaux", "trameri", "transinet"]
+    used = defaultdict(set)
+    for d in depots:
+        if d["company"] not in pool or d["company"] in used[d["city"]]:
+            d["company"] = next((c for c in pool if c not in used[d["city"]]), d["company"])
+        used[d["city"]].add(d["company"])
     return cities
 
 

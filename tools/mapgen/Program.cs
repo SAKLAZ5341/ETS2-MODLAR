@@ -350,7 +350,7 @@ internal static class Program
                     }
                     var pf = Prefab.Add(map, best.first, kind.GetProperty("token").GetString(), ppd, best.q);
                     pf.Look = kind.GetProperty("look").GetString();
-                    if (dcfg.GetProperty("variants").TryGetProperty(company, out var vr)) pf.Variant = vr.GetString();
+                    pf.Variant = dcfg.GetProperty("variants").TryGetProperty(d.GetProperty("kind").GetString(), out var vk) && vk.TryGetProperty(company, out var vr) ? vr.GetString() : "default";
                     foreach (var (arm, want) in new[] { (d.GetProperty("arm0"), n0), (d.GetProperty("arm1"), n1) })
                     {
                         var actual = pf.Nodes.OrderBy(n => Vector3.DistanceSquared(n.Position, want)).First().Position;

@@ -17,11 +17,9 @@
   "junctions_X": 57,
   "depots": 6,
   "depot_companies": {
-    "stokes": 1,
-    "lkwlog": 1,
+    "stokes": 2,
     "trameri": 1,
-    "transinet": 1,
-    "tradeaux": 1,
-    "posped": 1
+    "transinet": 2,
+    "tradeaux": 1
   }
 }

@@ -175,12 +175,16 @@
       }
     },
     "variants": {
-      "stokes": "de_stokes",
-      "transinet": "de_trans",
-      "lkwlog": "de_lkwlog",
-      "tradeaux": "at_tradeaux",
-      "posped": "lux_posped",
-      "trameri": "at_trameri"
+      "generic": {
+        "stokes": "de_stokes",
+        "transinet": "de_trans"
+      },
+      "logistic": {
+        "tradeaux": "at_tradeaux"
+      },
+      "light_factory": {
+        "trameri": "at_trameri"
+      }
     },
     "city_area": true
   }
