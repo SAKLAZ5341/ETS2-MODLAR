@@ -141,3 +141,14 @@ Hedef: Gebze + Darıca + Dilovası, gerçekçi ve oynanabilir. Sıra:
   `company/<şirket>/editor/gebze.sii`.
 - Sonuç: 475 kavşak, 11.760 yol, 3.674 zemin, 8 depo. Bina indirmesi (Dilovası dahil) Overpass'ta uzun sürüyor;
   şimdilik eski 704 bina.
+
+## 13. Binalar ve editör taşması – 2026-11-21 17:20
+
+- Dilovası bina şeridi `tools/geo/fetch_buildings_extra.py` ile eklendi (+10.927; toplam 35.633 OSM binası).
+- Bina modelleri: Balkan Doğu `tr` seti (müstakil ev ×7, apartman ×3, cami), dükkân, Alman depo.
+  Hepsi `base.scs` içinde (DLC bağımlılığı yok). `build_city_export.py --max-buildings` (varsayılan 2800).
+- **Editör taşması ("Parameter packet batch system overflow")**: öğe sayısından çok çizilen *farklı*
+  model/look/variant sayısına bağlı. 1.485 binada eski 3 modelle sorun yok; 30+ çeşitli Türk/Balkan
+  modeliyle çöküyor. Çözüm: sınırlı model/variant seti. Kısa çıkmaz sokaklar (< 60 m) atıldı
+  (kenar 12,5 bin → 7,8 bin), zemin hücresi 96 m.
+- Steam: `bin\win_x64\steam_appid.txt` olmadan exe Steam'e devrediyor ve başlatma penceresinde takılıyor.
