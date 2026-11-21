@@ -45,11 +45,11 @@ tutulur. OpenStreetMap verisi ODbL lisanslıdır ve atıf gerektirir.
 ## Coğrafi veri araçları
 
 ```powershell
-.\.venv\Scripts\python.exe -I tools\geoetch_osm.py          # OSM indir (data/raw)
-.\.venv\Scripts\python.exe -I tools\geouild_network.py      # yol ağı, kavşak, sanayi
-.\.venv\Scripts\python.exe -I tools\geouild_prototype.py --scale 19
+.\.venv\Scripts\python.exe -I tools\geo\fetch_osm.py          # OSM indir (data/raw)
+.\.venv\Scripts\python.exe -I tools\geo\build_network.py      # yol ağı, kavşak, sanayi
+.\.venv\Scripts\python.exe -I tools\geo\build_prototype.py --scale 19
 .\.venv\Scripts\python.exe -I tools\geo\export_editor_tables.py --scale 19
-.\.venv\Scripts\python.exe -I testsun_tests.py
+.\.venv\Scripts\python.exe -I tests\run_tests.py
 ```
 
 Editör adımları: `docs/EDITOR_GUIDE.md`. Son durum: `docs/OVERNIGHT_REPORT_20261121.md`.
