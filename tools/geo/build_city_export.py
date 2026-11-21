@@ -49,7 +49,7 @@ def main() -> None:
     ap.add_argument("--exclude", nargs="*", default=[], help="dışlanacak OSM highway sınıfları")
     ap.add_argument("--road-clearance", type=float, default=8.0, help="bina merkezi - yol arası en az oyun m")
     ap.add_argument("--min-building-gap", type=float, default=18.0, help="bina merkezleri arası en az oyun m")
-    ap.add_argument("--max-buildings", type=int, default=2800, help="en büyükten başlayarak en fazla bu kadar bina (editör öğe sınırı)")
+    ap.add_argument("--max-buildings", type=int, default=1600, help="en büyükten başlayarak en fazla bu kadar bina (editör öğe sınırı)")
     ap.add_argument("--road-clearance-default", type=float, default=8.0)
     a = ap.parse_args()
     S = a.scale
