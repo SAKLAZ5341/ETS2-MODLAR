@@ -12,8 +12,10 @@ Hazırlayan: Claude Code · Çalışma: 03:30–04:00 · Kapsam: kullanıcının
 | Koordinat dönüşümü | ✅ WGS84 → UTM 35N → ETS2 oyun metresi (1:19 ve 1:10 iki sürüm) |
 | Yol sınıflandırma ve bağlantı doğrulama | ✅ 23.567 yol, 14 testten 12'si geçti |
 | Editöre hazır dosyalar | ✅ Düğüm tabloları, CSV, GeoJSON, görsel, kılavuz, paketleme betiği |
-| **Map Editor'de boş harita modülü** | ❌ **Yapılamadı** – ekran erişim isteği reddedildi (aşağıda) |
-| Haritayı kaydet, yeniden aç, test et | ❌ Yapılamadı (üsttekine bağlı) |
+| **Map Editor'de harita modülü** | ✅ **Tamam (11:29)** – ekran erişimi verildikten sonra `saklaz.mbd` oluşturuldu (bkz. §8) |
+| Haritayı kaydet, yeniden aç, test et | ✅ Kaydedildi; editör kapatılıp `-edit saklaz` ile yeniden açıldı: "Map loaded" |
+| D-100 Çayırova–Gebze editörde | ✅ Gerçek koordinatlarla çizildi (36 düğüm, sapma ≈0,3 m) |
+| Oyun içi sürüş testi | ❌ Yapılmadı – başlangıç noktası/şirket yok; bağımsız harita yükleme yöntemi doğrulanmadı |
 
 **Dürüst durum:** Gerçek coğrafi veri ve editöre aktarılmaya hazır prototip verisi tamam. ETS2 içinde
 **henüz bir harita modülü yok**. Editörü yalnızca ekran üzerinden (tıklama/klavye) kullanabiliyorum ve
@@ -105,3 +107,31 @@ Görsel: `docs/img/prototype_corridor_s19.png` (1:10 sürümü de var).
 3. `check_editor_output.py` → sonuç bana iletilsin; P1 D-100 çizimi.
 4. P4 Gebze, P3 Darıca, P2/P5 TEM bağlantıları; kavşak prefabları (`ROAD_NETWORK.md` kavşak tablosu).
 5. Bir depo/fabrika (TOSB veya Gebze OSB bölgesi) + başlangıç noktası → Aşama F oyun içi test.
+
+
+## 8. Ek – Map Editor oturumu (2026-11-21 11:20–11:40, ekran erişimiyle)
+
+| Adım | Sonuç | Kanıt |
+|---|---|---|
+| Siyah ekran | Arıza değil: harita boşken görüş alanı siyah. İlk öğe eklenince arazi ve yol görüntülendi | `docs/img/editor_d100_s19.jpg` |
+| Boş harita kaydı | Editör reddetti: `Saving empty map is not allowed!` → tek deneme yolu eklenip kaydedildi, sonra silindi | editor.log |
+| Kayıt yeri | `D:\SAKLAZ_DEV\Euro Truck Simulator 2\mod\user_map\map\saklaz.mbd` + `saklaz\sec*.{base,aux,data,desc,layer}` | `check_editor_output.py` |
+| Yeniden açma | Editör kapatıldı, `-homedir D:\SAKLAZ_DEV -noworkshop -edit saklaz` ile açıldı: `Map '/map/saklaz.mbd' ... Map loaded` | editor.log |
+| D-100 | `ger hw 3 lanes 2m offset tmpl` (base oyun, DLC yok), 36 düğüm: Çayırova batı sınırı (−285,0; −57,4) → Gebze Kavşağı yakını (143,4; −5,0). İmleç okumasıyla hedeften sapma ≈0,3 m | ekran + durum çubuğu |
+| Paket | `releases/saklaz_turkiye_map_0.1.0-dev_*.scs` (23 dosya, zip doğrulandı). Oyuna **kurulmadı** | `build_scs.py` |
+| Testler | 13/14 geçti (kalan: OSM'de D-100 `ref` etiket boşluğu) | `tests/geo_validation_report.md` |
+
+Yedekler: `D:\SAKLAZ_DEV\backups\user_map_saklaz_*.tar` (her kayıttan sonra).
+
+### Öğrenilen editör davranışları
+- Menüler: *File → New / Open / Save / Save As (Ctrl+Shift+S)*; kayıt penceresinin dizini `/map/`. "Source" kutusu DLC filtresidir, boş bırakılmalı.
+- Araçlar: *New Item (E)*, *Move Item (M)*, *Delete Item (D)*. New Item modunda her tıklama yola düğüm ekler; ~10 oyun metreden yakın tıklamalar yok sayılır; Esc bitirir.
+- Kamera yukarıdan bakıyor; durum çubuğundaki imleç koordinatı yalnızca arazi veya yol üzerindeyken güncelleniyor.
+- Bir yol düğümüne yalnızca iki yol bağlanabiliyor. **Gebze, Darıca ve TEM bağlantıları için kavşak prefabı gerekiyor**; bu yüzden P2–P5 henüz çizilmedi.
+- Editör exe ile parametreli başlatılınca Steam "bu parametrelerle başlatılsın mı" onayı gösteriyor (Steam penceresinde).
+- Oyun klasöründe **OptiScaler** (üçüncü taraf ölçekleyici, ekranda "Insert for menu" yazısı) yüklü. Önceki siyah ekran/çökme şikâyetlerinde etkisi olabilir; oyun dosyası olduğu için dokunulmadı.
+
+### Sonraki adımlar (güncel)
+1. Kavşak prefabları: Gebze Kavşağı (D-100↔TEM), Darıca ve Gebze merkez bağlantıları.
+2. Bir şirket/depo prefabı ve oyuncu başlangıç noktası.
+3. Bağımsız haritanın oyunda nasıl yükleneceğini doğrulamak (paket yapısı/harita adı), sonra oyun içi sürüş testi.

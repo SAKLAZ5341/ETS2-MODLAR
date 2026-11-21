@@ -12,8 +12,8 @@ Euro Truck Simulator 2 için gerçek coğrafyaya dayalı Türkiye haritası.
 |---|---|---|
 | A | Ortam analizi | Tamamlandı (docs/TECHNICAL_REVIEW_20261121.md) |
 | B | Coğrafi veri | Tamamlandı – OSM verisi, yol ağı, prototip koridoru |
-| C | Harita altyapısı | Bekliyor – editörde `saklaz` haritası elle oluşturulacak |
-| D | İlk yollar | Başlamadı |
+| C | Harita altyapısı | Tamamlandı – `saklaz` haritası kaydediliyor ve yeniden açılıyor |
+| D | İlk yollar | Devam ediyor – D-100 Çayırova–Gebze çizildi; kavşaklar bekliyor |
 | E | İlk yerleşim | Başlamadı |
 | F | Test ve paketleme | Başlamadı |
 

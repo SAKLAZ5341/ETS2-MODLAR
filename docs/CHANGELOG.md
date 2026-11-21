@@ -2,6 +2,14 @@
 
 ## [Yayınlanmadı] – 0.1.0 geliştirme
 
+### Eklendi (2026-11-21 öğle – Map Editor)
+- `saklaz` harita modülü (D:\SAKLAZ_DEV, mod/user_map/map) oluşturuldu, kaydedildi, yeniden açıldı.
+- D-100 Çayırova–Gebze Kavşağı gerçek koordinatlarla çizildi (1:19, `ger hw 3 lanes 2m offset`).
+- `build_scs.py` ile ilk test paketi (`releases/`, depoya girmez).
+
+### Düzeltildi (2026-11-21 öğle)
+- `build_scs.py` ve T14 testi, editörün durum dosyası `editor/saklaz.mbd`'yi harita sanıyordu.
+
 ### Eklendi (2026-11-21 gece)
 - Git deposu; proje içi `.venv` ve `requirements.txt`.
 - `tools/geo`: OSM indirme (Overpass), yol ağı sınıflandırma, prototip koridoru, editör düğüm tabloları.

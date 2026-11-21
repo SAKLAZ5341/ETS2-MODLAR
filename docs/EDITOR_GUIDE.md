@@ -1,9 +1,8 @@
 # Map Editor – Prototip Oluşturma Kılavuzu (elle yapılacak adımlar)
 
-> Bu adımlar **kullanıcı tarafından** yapılır. Gece çalışmasında ekran erişimi verilmediği için
-> editörde harita oluşturulamadı (bkz. `docs/OVERNIGHT_REPORT_20261121.md`).
-> Menü adları SCS Map Editor 1.62 arayüzüne göre ilk açılışta doğrulanmalıdır; farklıysa
-> bu dosyayı güncelleyin.
+> 2026-11-21'de bu adımlar uygulandı: `saklaz` haritası oluşturuldu ve D-100 çizildi.
+> Menü adları ETS2 1.62.3.3 editöründe doğrulandı. Boş harita kaydedilemez; önce en az bir öğe ekleyin.
+> Haritanın gerçek yeri: `mod\user_map\map\saklaz.mbd` (`editor\saklaz.mbd` yalnızca editörün durum dosyasıdır).
 
 ## 0. Editörü doğru profille açın
 
