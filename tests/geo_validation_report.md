@@ -1,4 +1,4 @@
-# Coğrafi veri doğrulama raporu – 2026-11-21 03:55
+# Coğrafi veri doğrulama raporu – 2026-11-21 11:38
 
 | Test | Sonuç | Ayrıntı |
 |---|---|---|
@@ -15,6 +15,6 @@
 | T11 Editör düğümleri arası boşluk ≤ düğüm aralığı (20 oyun m) + tolerans | GEÇTİ | en büyük aralık 19.56 oyun m, düğüm 177 |
 | T12 Editör düğümleri gerçek OSM geometrisinden sapma ≤ 5 m (gerçek) | GEÇTİ | P1 düğümlerinde en büyük sapma 2.88 m |
 | T13 ODbL atıfı türetilmiş dosyalarda mevcut | GEÇTİ | 8/8 dosyada atıf |
-| T14 Map Editor: D:\SAKLAZ_DEV'de kayıtlı saklaz.mbd var mı | **KALDI** | YOK – editörde harita henüz oluşturulmadı (elle adım, bkz. EDITOR_GUIDE.md) |
+| T14 Map Editor: D:\SAKLAZ_DEV'de kayıtlı saklaz.mbd var mı | GEÇTİ | D:\SAKLAZ_DEV\Euro Truck Simulator 2\mod\user_map\map\saklaz.mbd |
 
-Toplam: 12/14 geçti.
+Toplam: 13/14 geçti.

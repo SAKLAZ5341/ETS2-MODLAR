@@ -36,7 +36,8 @@ def main() -> None:
     manifest = (PKG / "manifest.sii").read_text(encoding="utf-8")
     ver = re.search(r'package_version:\s*"([^"]+)"', manifest).group(1)
     prof = Path(a.home) / "Euro Truck Simulator 2"
-    mbd = next(iter(sorted(prof.rglob(f"{a.map}.mbd"))), None) if prof.exists() else None
+    cand = prof / "mod" / "user_map" / "map" / f"{a.map}.mbd"  # editor/<ad>.mbd yalnızca editör durum dosyasıdır
+    mbd = cand if cand.exists() else None
     if mbd is None:
         print(f"HATA: '{a.map}.mbd' {prof} altında bulunamadı. Önce haritayı editörde kaydedin (docs/EDITOR_GUIDE.md).")
         raise SystemExit(2)

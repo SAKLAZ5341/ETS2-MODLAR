@@ -149,7 +149,7 @@ def _():
 @test("T14 Map Editor: D:\\SAKLAZ_DEV'de kayıtlı saklaz.mbd var mı")
 def _():
     prof = Path(r"D:\SAKLAZ_DEV\Euro Truck Simulator 2")
-    m = list(prof.rglob("saklaz.mbd")) if prof.exists() else []
+    m = [p for p in [prof / "mod/user_map/map/saklaz.mbd"] if p.exists()]
     return bool(m), (str(m[0]) if m else "YOK – editörde harita henüz oluşturulmadı (elle adım, bkz. EDITOR_GUIDE.md)")
 
 
