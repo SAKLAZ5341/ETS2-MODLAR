@@ -1,0 +1,24 @@
+{
+  "_note": "Yol tipi -> ETS2 road_look birim adı (token). Değerler 'dotnet run -- list' çıktısından doğrulanmalıdır. 'ger1' ve 'ger4' TruckLib örneklerinde kullanılan ana oyun tipleridir.",
+  "game_root": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Euro Truck Simulator 2",
+  "output_map_dir": "D:\\SAKLAZ_DEV\\Euro Truck Simulator 2\\mod\\user_map\\map",
+  "output_map_name": "saklaz_city",
+  "road_types": {
+    "hw3_divided": "ger4",
+    "r2_divided": "ger4",
+    "ramp_1lane": "ger1",
+    "r1_city": "ger1",
+    "r1_city_narrow": "ger1",
+    "service": "ger1"
+  },
+  "terrain_size": { "hw3_divided": 20, "r2_divided": 15, "default": 6 },
+  "buildings": {
+    "_note": "Bina yerleşimi: 'model' modunda tek modeller; model birim adları 'list' çıktısındaki /def/world/model*.sii içinden seçilmeli. Boş bırakılırsa bina üretilmez.",
+    "mode": "model",
+    "small_house": "",
+    "apartment": "",
+    "industrial": "",
+    "commercial": ""
+  },
+  "limits": { "max_roads": 0, "max_buildings": 0 }
+}

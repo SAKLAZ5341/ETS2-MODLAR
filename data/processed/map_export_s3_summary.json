@@ -1,0 +1,32 @@
+{
+  "scale": 3.0,
+  "roads": 12242,
+  "road_nodes": 49349,
+  "road_km_game": 743.7,
+  "by_class": {
+    "motorway": 43,
+    "trunk_link": 130,
+    "primary": 496,
+    "trunk": 112,
+    "motorway_link": 78,
+    "residential": 7079,
+    "tertiary": 757,
+    "primary_link": 134,
+    "secondary": 439,
+    "service": 1857,
+    "unclassified": 734,
+    "living_street": 300,
+    "tertiary_link": 41,
+    "secondary_link": 42
+  },
+  "junctions_3plus": 2235,
+  "buildings": 0,
+  "buildings_by_kind_top": [],
+  "extent_game_m": [
+    -2807,
+    1840,
+    -2805,
+    1781
+  ],
+  "file_mb": 3.6
+}

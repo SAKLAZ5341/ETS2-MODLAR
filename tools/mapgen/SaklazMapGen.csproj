@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>SaklazMapGen</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- TruckLib (sk-zk), GPL-2.0, harita sürümü 907 = ETS2 1.59–1.62 -->
+    <PackageReference Include="TruckLib" Version="0.5.3" />
+  </ItemGroup>
+
+</Project>
