@@ -54,3 +54,11 @@ ile programatik üretim. TruckLib 0.5.3, harita sürümü 907'yi (ETS2 1.59–1.
 3. Tüm yollar + binalar.
 4. Kavşaklar: ana kesişimlere prefab (TruckLib `Prefab.Add` + `Attach`; kütüphane prefabların "bozulabileceğini" belirtiyor, bu yüzden aşamalı ilerlenecek).
 5. Şirket/depo ve başlangıç noktası → oyun içi test.
+
+## 6. Güncelleme – 2026-11-21 12:30
+
+- .NET 10.0.404 kullanıcı tarafından `run.ps1` ile `D:\SAKLAZ_DEV\tools\dotnet` altına kuruldu; üretici derlendi.
+- Gerçek tipler def.scs/.pmd'den doğrulandı: yollar `ger14` / `ger11` / `ger5` / `ger1`; binalar `0700b` (var1, var2), `3q001` (variant1), `3z001` (variant1–4, 6 renk).
+- 37 bin parçalık ilk tam harita editörde "Parameter packet batch system overflow" ile çöktü. Sadeleştirme (6 m), en kısa parça 8 m, servis yolu ve living_street dışlama, ara sokakta arazi 0 ile 9.411 yol / 16.671 parça / 704 bina → **çökmeden açıldı**, *Recompute map* + kayıt yapıldı.
+- SnowyMoon (ReShade + OptiScaler + DLSS5) kullanıcı tarafından `tools/maintenance/remove_snowymoon.ps1` ile yedeğe taşındı. Sonrasında editör 3 zararsız hata ile, 9 sn'de açıldı; OptiScaler katmanı yok.
+- Sıradaki: kavşak prefabları (2.235 nokta), daha yoğun bina yerleşimi (Buildings öğesi), şirket/başlangıç noktası, oyun içi test.
