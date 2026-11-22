@@ -4,16 +4,17 @@
   "output_map_dir": "D:\\SAKLAZ_DEV\\Euro Truck Simulator 2\\mod\\user_map\\map",
   "output_map_name": "saklaz_city",
   "road_types": {
+    "_doc_tr": "2026-11-22: Türk/Balkan şablonları (base.scs): blke14c = blke road 1 tmpl tr, blke15 = blke road 1 minim (sokak), blke17 = blke road 2 city narrow, blke1/5/8/11/9 = blke hw. Önce Alman ger şablonlarıydı (her yer geniş asfalt).",
     "_doc": "ger14 = ger hw 3 lanes 2m offset tmpl (D-100/TEM); ger7 = ger road 2 city narrow tmpl (ana caddeler, r2 kavşak prefablarıyla uyumlu); ger5 = ger road 1 one way (rampa); ger1 = ger road 1 tmpl (r1)",
-    "hw3_divided": "ger14",
-    "hw2_oneway": "ger13",
-    "hw3_oneway": "ger16",
-    "hw4_oneway": "ger19",
-    "r2_divided": "ger7",
-    "ramp_1lane": "ger5",
-    "r1_city": "ger1",
-    "r1_city_narrow": "ger1",
-    "service": "ger1"
+    "hw3_divided": "blke9",
+    "hw2_oneway": "blke5",
+    "hw3_oneway": "blke8",
+    "hw4_oneway": "blke11",
+    "r2_divided": "blke17",
+    "ramp_1lane": "blke1",
+    "r1_city": "blke14c",
+    "r1_city_narrow": "blke15",
+    "service": "blke15"
   },
   "hw_junctions": {
     "_doc": "ppdnav ile doğrulandı. exit = ger_hw3_exit_joint_mirrored (node0 4 şerit giriş -> node1 3 şerit devam + node2 sağ rampa); merge = ger_hw3_exit_joint_tmpl_v02 (node0 3 şerit + node2 sağ rampa -> node1 4 şerit). anchor = OSM düğümüne oturan prefab düğümü.",

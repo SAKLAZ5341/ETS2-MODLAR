@@ -87,6 +87,8 @@ def main() -> None:
     ap.add_argument("--outer-cell", type=float, default=512.0, help="il geneli hücre kenarı (oyun m)")
     ap.add_argument("--outer-reach", type=float, default=900.0, help="il geneli: yola en çok bu kadar uzak hücre (oyun m)")
     ap.add_argument("--margin", type=float, default=300.0, help="yol ağının dışına taşma (oyun m)")
+    ap.add_argument("--center-cell", type=float, default=160.0, help="ilçe merkezi zemin hücresi (oyun m)")
+    ap.add_argument("--center-radius", type=float, default=1300.0, help="ilçe merkezi zemin yarıçapı (oyun m)")
     ap.add_argument("--smooth", type=int, default=2, help="çoğunluk filtresi tekrar sayısı")
     ap.add_argument("--core-from", default="data/processed/ground_core_s3.json",
                     help="çekirdek zemini bu dosyadan aynen al (bbox = çekirdek kutusu); yoksa yeniden üret. "
@@ -143,14 +145,26 @@ def main() -> None:
     from shapely.prepared import prep
     sea_p = prep(sea) if sea is not None else None
 
-    def classify(x0, z0, nx, nz, C, outer, sea_runs=False, sea_only=False):
+    def in_boxes(x, z, boxes):
+        return any(b[0] <= x <= b[2] and b[1] <= z <= b[3] for b in boxes)
+
+    # ilçe merkezleri (çekirdek dışı): orta çözünürlüklü zemin; iri il geneli hücreleri merkezleri çimen gösteriyordu
+    cboxes = []
+    for c in graph.get("cities", []):
+        if c.get("center"):
+            cx, cz = c["center"]
+            if not (core[0] <= cx <= core[2] and core[1] <= cz <= core[3]):
+                R = a.center_radius
+                cboxes.append((cx - R, cz - R, cx + R, cz + R))
+
+    def classify(x0, z0, nx, nz, C, outer, sea_runs=False, sea_only=False, skip=()):
         grid = []
         for i in range(nx):
             col = []
             for j in range(nz):
                 cx, cz = x0 + (i + 0.5) * C, z0 + (j + 0.5) * C
                 pt = Point(cx, cz)
-                if outer and core[0] <= cx <= core[2] and core[1] <= cz <= core[3]:
+                if (outer and core[0] <= cx <= core[2] and core[1] <= cz <= core[3]) or in_boxes(cx, cz, skip):
                     col.append(("skip", 0.0))
                     continue
                 if sea_p is not None and sea_p.contains(pt):
@@ -220,8 +234,16 @@ def main() -> None:
     C = a.cell
     runs = core_runs if core_runs is not None else         classify(core[0], core[1], int((core[2] - core[0]) // C) + 1, int((core[3] - core[1]) // C) + 1, C, False)
     nc = len(runs)
+    nc = len(runs)
+    CC = a.center_cell
+    done_boxes = [core]
+    for b in cboxes:
+        runs += classify(b[0], b[1], int((b[2] - b[0]) // CC) + 1, int((b[3] - b[1]) // CC) + 1, CC, False,
+                         sea_runs=True, skip=done_boxes)
+        done_boxes.append(b)
+    print("ilçe merkezi zemini:", len(cboxes), "merkez,", len(runs) - nc, "parça")
     CO = a.outer_cell
-    runs += classify(X0, Z0, int((X1 - X0) // CO) + 1, int((Z1 - Z0) // CO) + 1, CO, True, sea_runs=True)
+    runs += classify(X0, Z0, int((X1 - X0) // CO) + 1, int((Z1 - Z0) // CO) + 1, CO, True, sea_runs=True, skip=cboxes)
     # çekirdek kutusundaki deniz (çekirdek zemini dosyadan geldiği için denizi yok): yalnız deniz hücreleri
     CS = 384.0
     runs += classify(core[0], core[1], int((core[2] - core[0]) // CS) + 1, int((core[3] - core[1]) // CS) + 1, CS, False,

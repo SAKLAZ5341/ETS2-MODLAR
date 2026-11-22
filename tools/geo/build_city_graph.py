@@ -77,6 +77,7 @@ def main() -> None:
     ap.add_argument("--drop-deadend-len", type=float, default=90.0, help="bu uzunluktan kısa çıkmaz ara sokakları at (oyun m; 0=kapalı)")
     ap.add_argument("--no-collapse", action="store_true", help="bölünmüş caddeleri tek hatta indirgeme")
     ap.add_argument("--core-only", action="store_true", help="yalnız Gebze/Darıca/Çayırova/Dilovası çekirdeği")
+    ap.add_argument("--cluster-len", type=float, default=22.0, help="bu uzunluktan kısa kesişim-kesişim parçası daraltılır (oyun m)")
     ap.add_argument("--connect-iters", type=int, default=12, help="bağlanamayan kesişimlerde sokak kaldırma turu")
     ap.add_argument("--tertiary-radius", type=float, default=3000.0, help="il geneli tertiary: merkeze en çok (gerçek m)")
     ap.add_argument("--no-villages", dest="villages", action="store_false", help="merkezden uzak köy yollarını alma")
@@ -238,6 +239,45 @@ def main() -> None:
             ed["id"] = len(keep)
             keep.append(ed)
         print(f"çok kısa kenar daraltıldı: {short} (kenar {len(edges)} -> {len(keep)})")
+        edges = keep
+
+    # 2c) Kesişim kümeleme: iki kesişimi (derece ≥ 3) birbirine bağlayan kısa parça (< cluster_len) daraltılır;
+    #     iki yakın T tek X olur ve kavşak prefabı (kol 18 m) sığar. Aksi halde ikisi de prefabsız kalıyor,
+    #     ana yollar kopuyordu (yeni profilde HQ şehirleri ve GPS, 2026-11-22). Tur başına her düğüm bir kez.
+    for _ in range(3):
+        deg = Counter()
+        for ed in edges:
+            deg[ed["a"]] += 1
+            deg[ed["b"]] += 1
+        pos = {}
+        for ed in edges:
+            pos.setdefault(ed["a"], tuple(ed["pts"][0]))
+            pos.setdefault(ed["b"], tuple(ed["pts"][-1]))
+        merged_into, touched = {}, set()
+        for ed in sorted(edges, key=lambda e: e["len"]):
+            if ed["len"] >= a.cluster_len or ed["a"] == ed["b"]:
+                continue
+            if deg[ed["a"]] < 3 or deg[ed["b"]] < 3 or ed["a"] in touched or ed["b"] in touched:
+                continue
+            if ed["type"] in ("hw3_oneway", "hw3_divided") or ed["oneway"]:
+                continue  # otoyol şeritleri ve tek yönlü yollar korunur
+            pa, pb = pos[ed["a"]], pos[ed["b"]]
+            pos[ed["a"]] = (round((pa[0] + pb[0]) / 2, 3), round((pa[1] + pb[1]) / 2, 3))
+            merged_into[ed["b"]] = ed["a"]
+            touched |= {ed["a"], ed["b"]}
+        if not merged_into:
+            break
+        keep = []
+        for ed in edges:
+            na, nb = merged_into.get(ed["a"], ed["a"]), merged_into.get(ed["b"], ed["b"])
+            if na == nb:
+                continue  # daraltılan parça
+            ed["a"], ed["b"] = na, nb
+            ed["pts"][0], ed["pts"][-1] = list(pos[na]), list(pos[nb])
+            ed["len"] = round(sum(math.dist(p, q) for p, q in zip(ed["pts"], ed["pts"][1:])), 1)
+            ed["id"] = len(keep)
+            keep.append(ed)
+        print(f"kesişim kümeleme: {len(merged_into)} kısa parça daraltıldı")
         edges = keep
 
     # C# üreticinin prefab açısı tutmadığı için reddettiği kavşak düğümleri (junction_rejects.json) birikimli
@@ -566,7 +606,7 @@ def main() -> None:
           f"%{100 * sum(e['len'] for e in edges if e['id'] in main_edges) / sum(e['len'] for e in edges):.1f} uzunluk")
     depots = place_depots(edges, chosen, S, a, links=road_links, allowed=main_edges)
     cities = assign_cities(depots, edges, S)
-    garages = place_garages(edges, chosen, depots, S, links=road_links, allowed=main_edges)
+    garages = place_garages(edges, chosen, depots, S, links=road_links, allowed=main_edges, cities=cities)
     out = {"meta": meta, "edges": edges, "junctions": chosen, "hw_junctions": hwj, "depots": depots, "garages": garages,
            "cities": cities, "road_links": road_links, "city_areas": city_grid(edges, S)}
     dst.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
@@ -1027,7 +1067,7 @@ def main_component(edges, junctions, links):
     return {e["id"] for e in edges if f(("e", e["id"])) == best}
 
 
-def place_garages(edges, chosen, depots, S, links=(), along=26.7, need=78.0, clear=42.0, allowed=None):
+def place_garages(edges, chosen, depots, S, links=(), along=26.7, need=78.0, clear=42.0, allowed=None, cities=()):
     """Her şehre bir oyuncu garajı (garage_medium_01): yeni profilde merkez (HQ) şehri seçimi ve tırın başlangıç
     yeri garajlardan gelir; garajsız haritada şehir listesi boş kalır ve tır harita dışında (boşlukta) başlar.
     Prefabın iki düğümü yol boyunca 26,7 m aralıklı (yanal 22,7 m kayma C# tarafında); gövde yolun iki yanına
@@ -1041,7 +1081,13 @@ def place_garages(edges, chosen, depots, S, links=(), along=26.7, need=78.0, cle
     ltree = STRtree(lines)
     next_node = max(max(e["a"], e["b"]) for e in edges) + 1
     out, done = [], set()
-    for ed in sorted(edges, key=lambda e: -e["len"]):
+    # ilçe merkezine en yakın uygun yol önce (garaj = oyuncunun başladığı yer; kırsalda başlamasın)
+    centers = [tuple(c["center"]) for c in cities if c.get("center")]
+
+    def center_dist(e):
+        return min((min(math.dist(p_, c_) for p_ in e["pts"][::max(1, len(e["pts"]) // 8)] + [e["pts"][-1]])
+                    for c_ in centers), default=0.0)
+    for ed in sorted(edges, key=lambda e: (center_dist(e), -e["len"])):
         if ed["type"] not in ("r1_city", "r1_city_narrow") or ed["oneway"]:
             continue
         if allowed is not None and ed["id"] not in allowed:

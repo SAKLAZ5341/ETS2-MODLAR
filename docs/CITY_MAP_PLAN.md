@@ -367,3 +367,14 @@ Paket `releases/saklaz_turkiye_map_0.2.0-dev_20261122_1414.scs`.
 - Düzeltme: `write_mod_defs.py city_sui` ana oyun (wien.sui) / Grand Utopia biçiminde: city_pin_scale_factor[8],
   map_x_offsets[8], map_y_offsets[8], vehicle_brands, truck/ai plaka tanımları ("41 AB 123").
 - Logda kalan: "Failed to find camera point for game intro! (kandira)" (yalnız tanıtım kamerası; çökme değil).
+
+## 27. Görünüm ve bağlantı – 2026-11-22 23:30
+- Yollar Türk/Balkan şablonları (base.scs): r1 `blke14c` (blke road 1 tmpl tr), sokak `blke15` (minim), r2 `blke17`,
+  otoyol `blke5/8/11/9`, rampa `blke1`. Önce Alman `ger` şablonları (her yer geniş asfalt) vardı.
+- Kesişim kümeleme (2c, `--cluster-len 22`): kesişimleri bağlayan kısa parçalar daraltılır → ana yol bağlantısı %12 → %26.
+- İlçe merkezleri (çekirdek dışı) için 160 m zemin ızgarası (1,3 km yarıçap); önce 1.536 m il geneli hücreleri
+  merkezleri çimen gösteriyordu.
+- Garajlar ilçe merkezine en yakın bağlı yola (İzmit 1,2 km, Gebze 2,8 km, Körfez 4,1 km; Derince/Kandıra ~10 km).
+- Ara sokak temizliği açık kalır: kapalıyken bağlantı %12, bina 6,5 bin, segment 23 bin (editör sınırı);
+  açıkken %26, 10,1 bin bina, 13 bin segment.
+- Kalan büyük iş: otoyol çıkışları (530 rampa noktası prefabsız) → ilçeler arası bağlantı; tabelalar; Darıca/Çayırova HQ.
