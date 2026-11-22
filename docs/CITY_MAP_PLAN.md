@@ -339,3 +339,11 @@ Paket `releases/saklaz_turkiye_map_0.2.0-dev_20261122_1414.scs`.
 - Kalan ~290 prefabsız uç (rampa ayrılmaları, kavşak deseni olmayan kesişimler) sürüşü engellemez.
 - Editör kayıtta 44 "Item outside sector boundary" uyarısı: il geneli 1.536 m zemin parçaları; oyun logunda yok.
 - Önizleme: harita/trafik/şirket hatası yok. Paket `releases/saklaz_turkiye_map_0.2.0-dev_20261122_1458.scs`.
+
+## 24. Gerçek profilde harita – 2026-11-22 22:30
+- Kullanıcı testi: harita seçilmeyen profilde `/map/europe.mbd` açıldı; seçilen profilde (`map_path: "/map/saklaz_city.mbd"`,
+  profil kaydı ScsC çözülerek okundu) harita hatasız yüklendi ama yeni profil Avrupa başlangıç kaydından kuruldu.
+- Neden: haritada garaj yoktu → HQ şehri listesi boş, tır harita dışında başlıyor.
+- Çözüm: `place_garages` her ilçeye bir oyuncu garajı (`43001` garage_medium_01), yol ikiye bölünüp düğümlere bağlanır;
+  C# `Garage` öğeleri (garaj noktası + satın alma noktası, şehir adıyla). 12/12 ilçe. Önizleme logu temiz.
+- Mod adı "SAKLAZ Türkiye Map - Kocaeli"; açıklamaya profil oluşturma talimatı eklendi.

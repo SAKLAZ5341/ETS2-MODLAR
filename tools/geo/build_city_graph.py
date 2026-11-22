@@ -476,10 +476,11 @@ def main() -> None:
     #    prefabı. Parça ikiye bölünür; depo düğümleri iki yeni kenar ucuna gelir.
     depots = place_depots(edges, chosen, S, a, links=road_links)
     cities = assign_cities(depots, edges, S)
+    garages = place_garages(edges, chosen, depots, S, links=road_links)
 
     out = {"meta": {"scale_divisor": S, "origin_osm_node": 26505108, "axes": "+X doğu, +Z güney, Y=0",
                     "prefab_radius": a.prefab_radius, "attribution": "(c) OpenStreetMap contributors, ODbL 1.0"},
-           "edges": edges, "junctions": chosen, "hw_junctions": hwj, "depots": depots, "cities": cities, "road_links": road_links,
+           "edges": edges, "junctions": chosen, "hw_junctions": hwj, "depots": depots, "garages": garages, "cities": cities, "road_links": road_links,
            "city_areas": city_grid(edges, S)}
     dst = ROOT / "data" / "processed" / f"map_graph_s{S:g}.json"
     dst.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
@@ -912,6 +913,78 @@ def place_depots(edges, chosen, S, a, per_city=3, min_gap=250.0, links=()):
                 break
     have = Counter(c for _, c in kind_city)
     print(f"depolar: {len(out)} (şehre göre {dict(have)}); elenen: {dict(why)}")
+    return out
+
+
+def place_garages(edges, chosen, depots, S, links=(), along=26.7, need=78.0, clear=42.0):
+    """Her şehre bir oyuncu garajı (garage_medium_01): yeni profilde merkez (HQ) şehri seçimi ve tırın başlangıç
+    yeri garajlardan gelir; garajsız haritada şehir listesi boş kalır ve tır harita dışında (boşlukta) başlar.
+    Prefabın iki düğümü yol boyunca 26,7 m aralıklı (yanal 22,7 m kayma C# tarafında); gövde yolun iki yanına
+    yayılır → her iki yanda boşluk aranır. Kenar depo gibi ikiye bölünür."""
+    from shapely.geometry import Point
+    from shapely.strtree import STRtree
+    rects = city_grid(edges, S)
+    jpts = [(j["x"], j["z"]) for j in chosen]
+    dpts = [tuple(d["body"]) for d in depots]
+    lines = [LineString(e["pts"]) for e in edges]
+    ltree = STRtree(lines)
+    next_node = max(max(e["a"], e["b"]) for e in edges) + 1
+    out, done = [], set()
+    for ed in sorted(edges, key=lambda e: -e["len"]):
+        if ed["type"] not in ("r1_city", "r1_city_narrow") or ed["oneway"]:
+            continue
+        pts = ed["pts"]
+        for i in range(len(pts) - 1):
+            P, Q = pts[i], pts[i + 1]
+            L = math.dist(P, Q)
+            if L < need:
+                continue
+            mid = ((P[0] + Q[0]) / 2, (P[1] + Q[1]) / 2)
+            city = grid_city(rects, mid)
+            if city in done:
+                continue
+            if any(math.dist(mid, j) < 70 for j in jpts) or any(math.dist(mid, d) < 160 for d in dpts):
+                continue
+            ux, uz = (Q[0] - P[0]) / L, (Q[1] - P[1]) / L
+            ok = True
+            for sgn in (1, -1):
+                for k in (-20, 0, 20):
+                    body = Point(mid[0] + ux * k - uz * 40 * sgn, mid[1] + uz * k + ux * 40 * sgn)
+                    if any(q_ != ed["id"] and lines[q_].distance(body) < clear for q_ in ltree.query(body.buffer(clear))):
+                        ok = False
+            probe = [(mid[0] + ux * k - uz * 60 * sg, mid[1] + uz * k + ux * 60 * sg) for k in (-40, 0, 40) for sg in (1, -1)]
+            if not ok or any(grid_city(rects, q_) != city for q_ in probe + [mid]):
+                continue
+            h = along / 2
+            n0 = (round(mid[0] - ux * h, 3), round(mid[1] - uz * h, 3))
+            n1 = (round(mid[0] + ux * h, 3), round(mid[1] + uz * h, 3))
+            ida, idb = next_node, next_node + 1
+            next_node += 2
+            B = dict(ed, id=len(edges), a=idb, pts=[list(n1)] + [list(p_) for p_ in pts[i + 1:]])
+            ed["pts"] = [list(p_) for p_ in pts[:i + 1]] + [list(n0)]
+            ed["b"] = ida
+            for e2 in (ed, B):
+                e2["len"] = round(sum(math.dist(p_, q_) for p_, q_ in zip(e2["pts"], e2["pts"][1:])), 1)
+            for j in chosen:
+                for arm in j["arms"]:
+                    if arm["edge"] == ed["id"] and arm["end"] == "b":
+                        arm["edge"] = B["id"]
+            for lk in links:
+                for q_ in (0, 2):
+                    if lk[q_] == ed["id"] and lk[q_ + 1] == "b":
+                        lk[q_] = B["id"]
+            for d in depots + out:
+                for arm in (d["arm0"], d["arm1"]):
+                    if arm["edge"] == ed["id"] and arm["end"] == "b":
+                        arm["edge"] = B["id"]
+            edges.append(B)
+            lines.append(LineString(B["pts"]))
+            done.add(city)
+            out.append({"id": len(out), "city": city, "n0": list(n0), "n1": list(n1), "mid": [round(mid[0], 2), round(mid[1], 2)],
+                        "arm0": {"edge": ed["id"], "end": "b"}, "arm1": {"edge": B["id"], "end": "a"}})
+            break
+    missing = sorted(set(CITY_TOKENS.values()) - done)
+    print(f"garaj: {len(out)} şehir; garajsız: {missing}")
     return out
 
 

@@ -198,6 +198,13 @@
       }
     }
   },
+  "garages": {
+    "_doc": "Oyuncu garajı (her şehre bir): yeni profilde HQ şehri seçimi ve başlangıç yeri garajlardan gelir. node0 içe +X, node1 içe -X; yol boyunca 26,7 m, yanal 22,7 m.",
+    "token": "43001",
+    "ppd": "/prefab/garage_player/garage_medium_01.ppd",
+    "look": "default",
+    "variant": "default"
+  },
   "depots": {
     "_doc": "İki düğümlü depo prefabları (ana oyun, Avusturya seti). variants = şirket tabelası.",
     "city": "gebze",

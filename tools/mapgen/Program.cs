@@ -304,6 +304,11 @@ internal static class Program
                 Console.WriteLine($"{p}: düğüm={d.Nodes.Count}");
                 for (int i = 0; i < d.Nodes.Count; i++)
                     Console.WriteLine($"  node{i} pos={d.Nodes[i].Position} dir={d.Nodes[i].Direction}");
+                foreach (var g in d.SpawnPoints.GroupBy(s => s.Type))
+                {
+                    var c = g.Aggregate(Vector3.Zero, (acc, s) => acc + s.Position) / g.Count();
+                    Console.WriteLine($"  spawn {g.Key}: {g.Count()} ort={c}");
+                }
                 var pmd = Path.ChangeExtension(p, ".pmd");
                 var m = TruckLib.Models.Model.Open(pmd, fs);
                 Console.WriteLine($"  looks=[{string.Join(",", m.Looks.Select(l => l.Name))}] variants=[{string.Join(",", m.Variants.Select(v => v.Name))}]");
@@ -540,7 +545,7 @@ internal static class Program
             Console.WriteLine($"otoyol çıkış/katılma prefabı: {hwPlaced} (reddedilen {hwRejected})");
         }
 
-        int depots = 0;
+        int depots = 0, garagesPlaced = 0;
         if (cfg.TryGetProperty("depots", out var dcfg) && graph.TryGetProperty("depots", out var dlist))
         {
             var city = dcfg.GetProperty("city").GetString();
@@ -607,6 +612,50 @@ internal static class Program
                     Console.WriteLine($"depo {d.GetProperty("id")}: {company} ({d.GetProperty("kind")}) noktalar={co.SpawnPoints.Count}");
                 }
                 catch (Exception ex) { Console.WriteLine($"depo {d.GetProperty("id")} atlandı: {ex.Message}"); }
+            }
+            // 1b2) oyuncu garajları: her şehre bir (HQ şehri seçimi ve başlangıç yeri bunlardan gelir)
+            if (cfg.TryGetProperty("garages", out var gcfg) && graph.TryGetProperty("garages", out var glist))
+            {
+                var gppd = TruckLib.Models.Ppd.PrefabDescriptor.Open(gcfg.GetProperty("ppd").GetString(), fs);
+                Vector3 g0 = gppd.Nodes[0].Position, g1 = gppd.Nodes[1].Position;
+                var gin = Vector3.Normalize(new Vector3(gppd.Nodes[0].Direction.X, 0, gppd.Nodes[0].Direction.Z));
+                foreach (var gd in glist.EnumerateArray())
+                {
+                    try
+                    {
+                        Vector3 P(JsonElement a) => V(a[0].GetDouble(), a[1].GetDouble());
+                        Vector3 n0 = P(gd.GetProperty("n0")), n1 = P(gd.GetProperty("n1"));
+                        var u = Vector3.Normalize(n1 - n0);
+                        // node0'ın içe bakan yönü (yerel) yol yönüne (n0 → n1) hizalanır; düğümlerin ortası yol ortasına
+                        float yaw = MathF.Atan2(u.X, u.Z) - MathF.Atan2(gin.X, gin.Z);
+                        var q = Quaternion.CreateFromYawPitchRoll(yaw, 0, 0);
+                        var mid = (n0 + n1) / 2;
+                        var origin = mid - Vector3.Transform((g0 + g1) / 2, q);
+                        var want = gppd.Nodes.Select(n => origin + Vector3.Transform(n.Position, q)).ToList();
+                        if (Vector3.Distance(want[0], n0) > Vector3.Distance(want[0], n1))
+                            throw new InvalidOperationException("garaj yönü ters hesaplandı");
+                        var pf = AddPrefabChecked(map, gcfg.GetProperty("token").GetString(), gppd, q, want);
+                        pf.Look = gcfg.GetProperty("look").GetString();
+                        pf.Variant = gcfg.GetProperty("variant").GetString();
+                        foreach (var (arm, ni) in new[] { (gd.GetProperty("arm0"), 0), (gd.GetProperty("arm1"), 1) })
+                        {
+                            var actual = pf.Nodes.OrderBy(n => Vector3.DistanceSquared(n.Position, want[ni])).First().Position;
+                            attach[(arm.GetProperty("edge").GetInt32(), arm.GetProperty("end").GetString())] = (pf, actual, actual, 1f);
+                        }
+                        Vector3 W(TruckLib.Models.Ppd.SpawnPointType t) =>
+                            gppd.SpawnPoints.Where(s => s.Type == t).Select(s => origin + Vector3.Transform(s.Position, q)).DefaultIfEmpty(origin).First();
+                        var ga = Garage.Add(map, pf, W(TruckLib.Models.Ppd.SpawnPointType.GaragePoint));
+                        ga.CityName = gd.GetProperty("city").GetString();
+                        ga.IsBuyPoint = false;
+                        var gb = Garage.Add(map, pf, W(TruckLib.Models.Ppd.SpawnPointType.BuyPoint));
+                        gb.CityName = ga.CityName;
+                        gb.IsBuyPoint = true;
+                        noBuild.Add((origin + Vector3.Transform(new Vector3(-30, 0, 10), q), 85f));
+                        garagesPlaced++;
+                    }
+                    catch (Exception ex) { Console.WriteLine($"garaj {gd.GetProperty("id")} atlandı: {ex.Message}"); }
+                }
+                Console.WriteLine($"garaj: {garagesPlaced}");
             }
             if (dcfg.GetProperty("city_area").GetBoolean() && graph.TryGetProperty("city_areas", out var alist))
             {

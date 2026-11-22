@@ -1,10 +1,11 @@
 SAKLAZ Türkiye Map - 0.2.0 geliştirme sürümü
-Bağımsız (standalone) harita: Gebze, Darıca, Çayırova ve Dilovası (1:3 şehir ölçeği).
-Gerçek OpenStreetMap yol ağı, kavşaklar, binalar, zemin ve ağaçlar, şirket depoları.
-Yalnızca ana oyun içerikleri kullanılır (DLC gerekmez). ETS2 1.62.
+Bağımsız (standalone) harita: Kocaeli'nin 12 ilçesi (1:3 ölçek) – Gebze, Darıca, Çayırova, Dilovası,
+İzmit, Körfez, Derince, Gölcük, Karamürsel, Kandıra, Kartepe, Başiskele.
+Gerçek OpenStreetMap yol ağı, kavşaklar, otoyol çıkışları, köy yolları, binalar, zemin, şirket depoları
+ve her ilçede bir garaj. Yalnızca ana oyun içerikleri kullanılır (DLC gerekmez). ETS2 1.62.
 
-Kullanım: modu etkinleştirin, yeni profil oluştururken haritayı seçin.
-Geliştirme sürümüdür; ana yol (D-100/TEM) kavşakları ve bazı depolar eksiktir.
+Kullanım: modu etkinleştirin, yeni profil oluştururken Harita olarak "saklaz_city"yi ve
+merkez (HQ) şehri olarak bir Kocaeli ilçesini seçin.
 
 Harita verisi: © OpenStreetMap katkıda bulunanlar (ODbL 1.0)
 https://www.openstreetmap.org/copyright
