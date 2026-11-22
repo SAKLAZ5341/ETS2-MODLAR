@@ -36,6 +36,6 @@ OBS bilgisayarı açıkken: `192.168.1.150` gerçekten o bilgisayar olmalı (o b
    - gelen akış 1 `OYUN PC KULAKLI` → sanal giriş "Oyun PC" → B1; akış 2 `OYUN PC MIKROFO` → "Mikrofon" → B2
    - kaynak IP `192.168.1.186`, UDP 6980 güvenlik duvarı izni, Voicemeeter açılışta başlar
    - betik bu bilgisayarın IP'sini yazar; `192.168.1.150` değilse oyun bilgisayarında
-     `.venv\Scripts\python.exe tools\streamoicemeeter_gaming_pc.py --obs-ip <IP>`
+     `.venv\Scripts\python.exe tools\stream\voicemeeter_gaming_pc.py --obs-ip <IP>`
 4. OBS → Ses Girişi Yakalama: `Voicemeeter Out B1` (Oyun), `Voicemeeter Out B2` (Mikrofon) ayrı kaynaklar.
 5. Görüntü: yakalama kartı veya NDI ile oyun bilgisayarından.
