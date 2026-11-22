@@ -6,7 +6,9 @@
   "road_types": {
     "_doc": "ger14 = ger hw 3 lanes 2m offset tmpl (D-100/TEM); ger7 = ger road 2 city narrow tmpl (ana caddeler, r2 kavşak prefablarıyla uyumlu); ger5 = ger road 1 one way (rampa); ger1 = ger road 1 tmpl (r1)",
     "hw3_divided": "ger14",
+    "hw2_oneway": "ger13",
     "hw3_oneway": "ger16",
+    "hw4_oneway": "ger19",
     "r2_divided": "ger7",
     "ramp_1lane": "ger5",
     "r1_city": "ger1",
@@ -15,12 +17,17 @@
   },
   "hw_junctions": {
     "_doc": "ppdnav ile doğrulandı. exit = ger_hw3_exit_joint_mirrored (node0 4 şerit giriş -> node1 3 şerit devam + node2 sağ rampa); merge = ger_hw3_exit_joint_tmpl_v02 (node0 3 şerit + node2 sağ rampa -> node1 4 şerit). anchor = OSM düğümüne oturan prefab düğümü.",
-    "exit": { "token": "mod_ger_31", "ppd": "/prefab2/fork_temp/ger/ger_hw3_exit_joint_mirrored_tmpl.ppd", "anchor": 1, "look": "ger_1", "variant": "sh_ger" },
-    "merge": { "token": "ch_4202j", "ppd": "/prefab2/fork_temp/ger/ger_hw3_exit_joint_tmpl_v02.ppd", "anchor": 0, "look": "ger_1", "variant": "default" }
+    "_doc2": "hi/lo seçimini tools/geo/assign_hw_lanes.py yapar (prefab düğümü ile yol şerit sayısı eşleşsin diye). lo: ch_2y016 = 3 -> 2 + rampa, ch_2y017 = 2 + rampa -> 3.",
+    "exit_hi": { "token": "mod_ger_31", "ppd": "/prefab2/fork_temp/ger/ger_hw3_exit_joint_mirrored_tmpl.ppd", "anchor": 1, "look": "ger_1", "variant": "sh_ger" },
+    "merge_hi": { "token": "ch_4202j", "ppd": "/prefab2/fork_temp/ger/ger_hw3_exit_joint_tmpl_v02.ppd", "anchor": 0, "look": "ger_1", "variant": "default" },
+    "exit_lo": { "token": "ch_2y016", "ppd": "/prefab2/fork_temp/ger/ger_hw3_oneway_to_hw2_oneway_split_to_hw1_oneway.ppd", "anchor": 1, "look": "ger_1", "variant": "default" },
+    "merge_lo": { "token": "ch_2y017", "ppd": "/prefab2/fork_temp/ger/ger_hw2_oneway_and_hw1_oneway_merge_to_hw3_oneway.ppd", "anchor": 0, "look": "ger_1", "variant": "default" }
   },
   "terrain_size": {
     "hw3_divided": 10,
+    "hw2_oneway": 6,
     "hw3_oneway": 6,
+    "hw4_oneway": 6,
     "r2_divided": 6,
     "default": 0
   },

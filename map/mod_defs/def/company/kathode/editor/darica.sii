@@ -2,6 +2,6 @@ SiiNunit
 {
 company_def : .darica {
  city: darica
- prefab: at_0j009
+ prefab: at_0j008
 }
 }

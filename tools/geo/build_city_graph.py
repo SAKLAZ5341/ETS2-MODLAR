@@ -292,10 +292,14 @@ def main() -> None:
 
     out = {"meta": {"scale_divisor": S, "origin_osm_node": 26505108, "axes": "+X doğu, +Z güney, Y=0",
                     "prefab_radius": a.prefab_radius, "attribution": "(c) OpenStreetMap contributors, ODbL 1.0"},
-           "edges": edges, "junctions": chosen, "hw_junctions": hwj, "depots": depots, "cities": cities}
+           "edges": edges, "junctions": chosen, "hw_junctions": hwj, "depots": depots, "cities": cities,
+           "city_areas": city_grid(edges, S)}
     dst = ROOT / "data" / "processed" / f"map_graph_s{S:g}.json"
     dst.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
-    deg = Counter(len(v) for v in inc.values())
+    # otoyol prefab ↔ yol şerit sayısı eşleme (hi/lo prefab + hw2/3/4_oneway)
+    import assign_hw_lanes
+    assign_hw_lanes.main(str(dst))
+    deg =Counter(len(v) for v in inc.values())
     summary = {"scale": S, "edges": len(edges), "segments": sum(len(e["pts"]) - 1 for e in edges),
                "graph_nodes": len(inc), "degree_hist": dict(sorted(deg.items())),
                "junction_candidates_city": len(cand), "junctions_chosen": len(chosen),
@@ -310,15 +314,10 @@ def main() -> None:
 CITY_TOKENS = {"Gebze": "gebze", "Darıca": "darica", "Çayırova": "cayirova", "Dilovası": "dilovasi"}
 
 
-def assign_cities(depots, edges, S):
-    """İlçe sınırlarından (OSM admin_level 6) şehir alanları; her depoya bulunduğu ilçenin şehri atanır.
-    Şehir alanı = ilçe poligonunun yol ağı kutusuyla kesişiminin sınır kutusu (oyun koordinatı)."""
-    from shapely.geometry import Point, box as sbox
+def load_city_polys(S):
+    """İlçe poligonları (OSM admin_level 6), oyun koordinatında: {token: (ad, poligon)}."""
     from shapely.ops import polygonize, unary_union
     g = lambda x, y: ((x - E0) / S, -(y - N0) / S)
-    xs = [p[0] for e in edges for p in e["pts"]]
-    zs = [p[1] for e in edges for p in e["pts"]]
-    net = sbox(min(xs), min(zs), max(xs), max(zs))
     polys = {}
     for el in json.loads((RAW / "districts.json").read_text(encoding="utf-8"))["elements"]:
         tok = CITY_TOKENS.get(el.get("tags", {}).get("name"))
@@ -327,6 +326,75 @@ def assign_cities(depots, edges, S):
         lines = [LineString([g(*T.transform(q["lon"], q["lat"])) for q in m["geometry"]])
                  for m in el.get("members", []) if m.get("role") == "outer" and "geometry" in m]
         polys[tok] = (el["tags"]["name"], unary_union(list(polygonize(unary_union(lines)))))
+    return polys
+
+
+_GRID = {}
+
+
+def city_grid(edges, S, cell=250.0):
+    """Oyunun şehir alanları (CityArea) için ÜST ÜSTE BİNMEYEN dikdörtgenler: yol ağı kutusu cell×cell ızgaraya
+    bölünür, her hücre merkezinin düştüğü ilçeye verilir, aynı satırdaki ardışık aynı ilçe hücreleri birleştirilir.
+    Neden: ilçe sınır kutuları çakışınca oyun depoyu başka şehre sayıyor ve aynı şehirde aynı depo prefabı
+    iki şirkete düşünce "Invalid company item assignment" veriyordu (2026-11-22)."""
+    key = (round(S, 3), cell)
+    if key in _GRID:
+        return _GRID[key]
+    from shapely.geometry import Point
+    polys = load_city_polys(S)
+    xs = [p[0] for e in edges for p in e["pts"]]
+    zs = [p[1] for e in edges for p in e["pts"]]
+    x0, z0 = math.floor(min(xs) / cell) * cell, math.floor(min(zs) / cell) * cell
+    nx, nz = int(math.ceil((max(xs) - x0) / cell)), int(math.ceil((max(zs) - z0) / cell))
+    rects = []
+    for j in range(nz):
+        run = None
+        for i in range(nx + 1):
+            tok = None
+            if i < nx:
+                c = Point(x0 + (i + 0.5) * cell, z0 + (j + 0.5) * cell)
+                tok = next((t for t, (_, poly) in polys.items() if poly.contains(c)), None)
+                if tok is None:  # ilçe dışı (ör. İstanbul sınırı, deniz kıyısı): en yakın ilçe → boşluk kalmaz
+                    tok = min(polys, key=lambda t: polys[t][1].distance(c))
+            if run and tok == run[0]:
+                run[2] = i
+                continue
+            if run and run[0]:
+                rects.append({"token": run[0], "x0": x0 + run[1] * cell, "x1": x0 + (run[2] + 1) * cell,
+                              "z0": z0 + j * cell, "z1": z0 + (j + 1) * cell})
+            run = [tok, i, i]
+    _GRID[key] = rects
+    return rects
+
+
+def grid_city(rects, pt, default="gebze"):
+    """Oyunun göreceği şehir: noktayı içeren ızgara dikdörtgeni (yoksa en yakını)."""
+    x, z = pt
+    best, bd = default, float("inf")
+    for r in rects:
+        dx = max(r["x0"] - x, 0, x - r["x1"])
+        dz = max(r["z0"] - z, 0, z - r["z1"])
+        d = math.hypot(dx, dz)
+        if d < bd:
+            best, bd = r["token"], d
+    return best
+
+
+def city_of(polys, pt):
+    from shapely.geometry import Point
+    P = Point(pt)
+    return next((t for t, (_, poly) in polys.items() if poly.contains(P)), "gebze")
+
+
+def assign_cities(depots, edges, S):
+    """İlçe sınırlarından (OSM admin_level 6) şehir alanları; her depoya bulunduğu ilçenin şehri atanır.
+    Şehir alanı = ilçe poligonunun yol ağı kutusuyla kesişiminin sınır kutusu (oyun koordinatı)."""
+    from shapely.geometry import Point, box as sbox
+    from shapely.ops import polygonize, unary_union
+    xs = [p[0] for e in edges for p in e["pts"]]
+    zs = [p[1] for e in edges for p in e["pts"]]
+    net = sbox(min(xs), min(zs), max(xs), max(zs))
+    polys = load_city_polys(S)
     cities = []
     for tok, (name, poly) in polys.items():
         part = poly.intersection(net)
@@ -336,15 +404,15 @@ def assign_cities(depots, edges, S):
         rp = part.representative_point()
         cities.append({"token": tok, "name": name, "x0": round(x0, 1), "z0": round(z0, 1),
                        "x1": round(x1, 1), "z1": round(z1, 1), "cx": round(rp.x, 1), "cz": round(rp.y, 1)})
+    rects = city_grid(edges, S)
     for d in depots:
-        pt = Point(d["body"])
-        d["city"] = next((t for t, (_, poly) in polys.items() if poly.contains(pt)), "gebze")
+        d["city"] = grid_city(rects, d["body"])
     # Her depo harita genelinde BENZERSİZ bir şirket alır; şirket o depo türünün prefabını ana oyunda da
     # kullanıyor olmalı (def.scs /def/company/*/editor taraması: data/processed/game_defs/company_prefabs.tsv).
     # Neden: oyunda her (şirket, şehir) için tek company_def/prefab var; şehir alanları çakışınca aynı şirketin
     # farklı türde iki deposu "Company item without company assignment" hatası veriyordu.
     pools = {"generic": ["stokes", "transinet", "posped"],
-             "logistic": ["tradeaux", "lkwlog", "posped", "eurogoodies"],
+             "logistic": ["tradeaux", "posped", "eurogoodies", "lkwlog"],
              "light_factory": ["trameri", "kathode"]}
     used = set()
     for d in depots:
@@ -366,7 +434,7 @@ DEPOT_TYPES = [
 ]
 
 
-def place_depots(edges, chosen, S, a, max_depots=len(DEPOT_TYPES), min_gap=300.0, clear=45.0):
+def place_depots(edges, chosen, S, a, max_depots=9, min_gap=300.0, clear=45.0):
     """Sanayi poligonu içindeki uzun düz parçalara depo yerleştirir; edges listesini yerinde böler."""
     from shapely.geometry import Point, Polygon
     from shapely.strtree import STRtree
@@ -386,6 +454,10 @@ def place_depots(edges, chosen, S, a, max_depots=len(DEPOT_TYPES), min_gap=300.0
     ltree = STRtree(lines)
     jpts = [(j["x"], j["z"]) for j in chosen]
     out, used = [], []
+    # Oyun bir şehirde aynı depo prefabını iki şirkete eşleyemiyor ("Invalid company item assignment ...
+    # Economy reset - company mismatch", 2026-11-22 önizlemede doğrulandı) → (tür, şehir) benzersiz olmalı.
+    rects = city_grid(edges, S)
+    kind_city = set()
     next_node = max(max(e["a"], e["b"]) for e in edges) + 1
     k = 0
     for ed in sorted(edges, key=lambda e: -e["len"]):
@@ -393,8 +465,7 @@ def place_depots(edges, chosen, S, a, max_depots=len(DEPOT_TYPES), min_gap=300.0
             break
         if ed["type"] not in ("r1_city", "r1_city_narrow") or ed["oneway"]:
             continue
-        typ = DEPOT_TYPES[k % len(DEPOT_TYPES)]
-        need = typ["span"] + 24
+        need = min(t["span"] for t in DEPOT_TYPES) + 24
         pts = ed["pts"]
         for i in range(len(pts) - 1):
             P, Q = pts[i], pts[i + 1]
@@ -402,7 +473,7 @@ def place_depots(edges, chosen, S, a, max_depots=len(DEPOT_TYPES), min_gap=300.0
             if L < need:
                 continue
             mid = ((P[0] + Q[0]) / 2, (P[1] + Q[1]) / 2)
-            if any(math.dist(mid, u) < min_gap for u in used) or any(math.dist(mid, j) < typ["span"] / 2 + 26 for j in jpts):
+            if any(math.dist(mid, u) < min_gap for u in used) or any(math.dist(mid, j) < need / 2 + 14 for j in jpts):
                 continue
             mp = Point(mid)
             if not any(inds[q].contains(mp) for q in itree.query(mp)):
@@ -418,6 +489,14 @@ def place_depots(edges, chosen, S, a, max_depots=len(DEPOT_TYPES), min_gap=300.0
                     break
             if side is None:
                 continue
+            bcity = grid_city(rects, (mid[0] + side[0] * 55, mid[1] + side[1] * 55))
+            # bu noktaya sığan ve o şehirde henüz olmayan türü seç (sıra k ile döner → türler dengeli)
+            cands = [DEPOT_TYPES[(k + q) % len(DEPOT_TYPES)] for q in range(len(DEPOT_TYPES))]
+            typ = next((t for t in cands if L >= t["span"] + 24 and (t["kind"], bcity) not in kind_city
+                        and not any(math.dist(mid, j) < t["span"] / 2 + 26 for j in jpts)), None)
+            if typ is None:
+                continue
+            kind_city.add((typ["kind"], bcity))
             h = typ["span"] / 2
             n0 = (round(mid[0] - ux * h, 3), round(mid[1] - uz * h, 3))
             n1 = (round(mid[0] + ux * h, 3), round(mid[1] + uz * h, 3))

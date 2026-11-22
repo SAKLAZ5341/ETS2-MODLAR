@@ -37,6 +37,7 @@ internal static class Program
             "prefabinfo" => PrefabInfo(cfg, args.Skip(1).ToArray()),
             "ppdnav" => PpdNav(cfg, args.Skip(1).ToArray()),
             "companyprefabs" => CompanyPrefabs(cfg),
+            "nodetest" => NodeTest(cfg, args.Skip(1).ToArray()),
             "buildgraph" => BuildGraph(cfg, args.Length > 1 ? args[1] : "data/processed/map_graph_s3.json",
                                        args.Length > 2 ? args[2] : "data/processed/map_export_s3.json"),
             _ => 2,
@@ -193,6 +194,89 @@ internal static class Program
             else Console.WriteLine("  özellikler: " + string.Join(",", d.GetType().GetProperties().Select(x => x.Name)));
         }
         return 0;
+    }
+
+    // Prefab düğümlerinde ileri/geri öğe durumu ve AppendRoad/Attach denemesi (TruckLib davranışını ölçmek için)
+    static int NodeTest(JsonElement cfg, string[] args)
+    {
+        var gameRoot = cfg.GetProperty("game_root").GetString();
+        using var fs = HashFsReader.Open(Path.Combine(gameRoot, "base.scs"));
+        {
+            var ppd = TruckLib.Models.Ppd.PrefabDescriptor.Open(args[1], fs);
+            var map = new Map();
+            var pf = Prefab.Add(map, Vector3.Zero, args[0], ppd, Quaternion.Identity);
+            var before = pf.Nodes.Select(n => n.Position).ToList();
+            pf.ChangeOrigin(1);
+            Console.WriteLine($"ChangeOrigin(1): Origin={pf.Origin} sıra=" + string.Join(",", pf.Nodes.Select(n => before.FindIndex(b => Vector3.Distance(b, n.Position) < 0.01f))));
+            for (int k = 0; k < pf.Nodes.Count; k++)
+            {
+                var m2 = new Map();
+                var p2 = Prefab.Add(m2, Vector3.Zero, args[0], ppd, Quaternion.Identity);
+                p2.ChangeOrigin(1);
+                var n = p2.Nodes[k];
+                var c2 = p2.Nodes.Aggregate(Vector3.Zero, (a, x) => a + x.Position) / p2.Nodes.Count;
+                var r = p2.AppendRoad((ushort)k, n.Position + Vector3.Normalize(n.Position - c2) * 30, "ger1", 0, 0);
+                Console.WriteLine($"  idx{k}: yolBaşı={(Vector3.Distance(r.Node.Position, n.Position) < 0.1f ? "prefab" : "uzak")}");
+            }
+        }
+        for (int i = 2; i + 1 < args.Length; i += 2)
+        {
+            var ppd = TruckLib.Models.Ppd.PrefabDescriptor.Open(args[i + 1], fs);
+            var c = ppd.Nodes.Aggregate(Vector3.Zero, (acc, n) => acc + n.Position) / ppd.Nodes.Count;
+            for (int ni = 0; ni < ppd.Nodes.Count; ni++)
+            {
+                foreach (var outward in new[] { true, false })
+                {
+                    var map = new Map();
+                    var pf = Prefab.Add(map, new Vector3(0, 0, 0), args[i], ppd, Quaternion.Identity);
+                    var n = pf.Nodes[ni];
+                    var dirOut = Vector3.Normalize(new Vector3(n.Position.X - c.X, 0, n.Position.Z - c.Z));
+                    var rotF = Vector3.Transform(Vector3.UnitZ, n.Rotation);
+                    var tgt = n.Position + (outward ? dirOut : -dirOut) * 30;
+                    string st = $"{args[i]} n{ni} {(outward ? "dış" : "iç ")} rotF·out={Vector3.Dot(rotF, dirOut):F2}";
+                    try
+                    {
+                        var r = pf.AppendRoad((ushort)ni, tgt, "ger16", 0, 0);
+                        bool startAtPrefab = Vector3.Distance(r.Node.Position, n.Position) < 0.1f;
+                        st += $" AppendRoad=OK yolBaşı={(startAtPrefab ? "prefab" : "uzak")}";
+                        try { r.Append(tgt + (tgt - n.Position)); st += " +Append=OK"; } catch (Exception ex) { st += " +Append=FAIL"; }
+                    }
+                    catch (Exception ex) { st += " AppendRoad=FAIL(" + ex.Message + ")"; }
+                    Console.WriteLine(st);
+                }
+            }
+        }
+        return 0;
+    }
+
+    // TruckLib Prefab.Add dönüşü düğüm 0'ın ppd yönüne göre uygular; düğüm 0'ı farklı yöne bakan prefablarda
+    // (ör. ch_4202j) prefab ters yerleşir. Boş bir haritada deneyerek düğümleri istenen konumlara oturtan
+    // yaw düzeltmesini bulur. maxDev: en kötü düğüm sapması (m).
+    static readonly Dictionary<string, float> prefabYawFix = new();
+    static int prefabFixed = 0;
+    static float worstPrefabDev = 0;
+    static Prefab AddPrefabChecked(Map map, string token, TruckLib.Models.Ppd.PrefabDescriptor ppd, Quaternion q, List<Vector3> want)
+    {
+        float Dev(Prefab p) => Enumerable.Range(0, want.Count).Max(k => Vector3.Distance(p.Nodes[k].Position, want[k]));
+        Quaternion Fix(float deg) => Quaternion.CreateFromYawPitchRoll(deg * MathF.PI / 180f, 0, 0) * q;
+        // düzeltme açısı prefab tipine özgü ve sabit; önbellekte yoksa ara
+        string key = token + "|" + ppd.Nodes.Count;
+        if (!prefabYawFix.TryGetValue(key, out var fix) || Dev(Prefab.Add(new Map(), want[0], token, ppd, Fix(fix))) > 0.5f)
+        {
+            float best = 0, bestDev = float.MaxValue;
+            for (float d = 0; d < 360; d += 0.5f)
+            {
+                float dv = Dev(Prefab.Add(new Map(), want[0], token, ppd, Fix(d)));
+                if (dv < bestDev) { bestDev = dv; best = d; }
+            }
+            fix = best; prefabYawFix[key] = fix;
+        }
+        var pf = Prefab.Add(map, want[0], token, ppd, Fix(fix));
+        float dev = Dev(pf);
+        if (fix != 0) prefabFixed++;
+        worstPrefabDev = MathF.Max(worstPrefabDev, dev);
+        if (dev > 1f) throw new InvalidOperationException($"{token} düğümleri yerine oturmadı (sapma {dev:F1} m)");
+        return pf;
     }
 
     static string Fmt(object o) => o switch
@@ -377,8 +461,7 @@ internal static class Program
             try
             {
                 var qb = Quaternion.CreateFromYawPitchRoll(bestYaw * MathF.PI / 180f, 0, 0);
-                var node0World = center + Vector3.Transform(nodePos[0], qb);
-                var pf = Prefab.Add(map, node0World, spec.token, spec.ppd, qb);
+                var pf = AddPrefabChecked(map, spec.token, spec.ppd, qb, nodePos.Select(p => center + Vector3.Transform(p, qb)).ToList());
                 pf.Look = look;
                 pf.Variant = spec.variant ?? variant;
                 for (int i = 0; i < arms.Count; i++)
@@ -401,9 +484,9 @@ internal static class Program
         if (cfg.TryGetProperty("hw_junctions", out var hcfg) && graph.TryGetProperty("hw_junctions", out var hlist))
         {
             var hspec = new Dictionary<string, (string token, TruckLib.Models.Ppd.PrefabDescriptor ppd, int anchor, string look, string variant)>();
-            foreach (var kind in new[] { "exit", "merge" })
+            foreach (var hp in hcfg.EnumerateObject().Where(o => !o.Name.StartsWith("_")))
             {
-                var h = hcfg.GetProperty(kind);
+                var kind = hp.Name; var h = hp.Value;
                 hspec[kind] = (h.GetProperty("token").GetString(),
                                TruckLib.Models.Ppd.PrefabDescriptor.Open(h.GetProperty("ppd").GetString(), fs),
                                h.GetProperty("anchor").GetInt32(), h.GetProperty("look").GetString(), h.GetProperty("variant").GetString());
@@ -412,11 +495,13 @@ internal static class Program
             {
                 try
                 {
-                    var sp = hspec[hj.GetProperty("kind").GetString()];
+                    var sp = hspec[hj.TryGetProperty("variant", out var hv) ? hv.GetString() : hj.GetProperty("kind").GetString() + "_hi"];
                     var np = sp.ppd.Nodes.Select(n => n.Position).ToList();
                     var J = V(hj.GetProperty("x").GetDouble(), hj.GetProperty("z").GetDouble());
                     var travel = Vector2.Normalize(new Vector2((float)hj.GetProperty("travel")[0].GetDouble(), (float)hj.GetProperty("travel")[1].GetDouble()));
-                    var localT = Vector2.Normalize(new Vector2(np[1].X - np[0].X, np[1].Z - np[0].Z));
+                    // akış yönü = node0'ın prefab içine bakan yönü (lo prefablarında node0-node1 hattı yanal kaymalı)
+                    var d0 = sp.ppd.Nodes[0].Direction;
+                    var localT = Vector2.Normalize(new Vector2(d0.X, d0.Z));
                     int bestYaw = 0; float bestDot = -2;
                     for (int yd = 0; yd < 360; yd++)
                     {
@@ -432,7 +517,9 @@ internal static class Program
                     var mid01 = (w[0] + w[1]) / 2;
                     float side = Vector2.Dot(new Vector2(w[2].X - mid01.X, w[2].Z - mid01.Z), right);
                     if (side <= 0) { hwRejected++; continue; }
-                    var pf = Prefab.Add(map, w[0], sp.token, sp.ppd, q);
+                    var pf = AddPrefabChecked(map, sp.token, sp.ppd, q, w);
+                    if (Environment.GetEnvironmentVariable("SAKLAZ_DEBUG") == "1")
+                        Console.WriteLine($"hw {hj.GetProperty("id")} {sp.token}: " + string.Join(" ", Enumerable.Range(0, w.Count).Select(k => $"n{k}Δ={Vector3.Distance(pf.Nodes[k].Position, w[k]):F1}")));
                     pf.Look = sp.look;
                     pf.Variant = sp.variant;
                     var mid = (w[0] + w[1]) / 2;
@@ -473,7 +560,8 @@ internal static class Program
                         float dist = Vector3.Distance(origin, body);
                         if (dist < bestD) { bestD = dist; best = (q, origin, a); }
                     }
-                    var pf = Prefab.Add(map, best.first, kind.GetProperty("token").GetString(), ppd, best.q);
+                    var pf = AddPrefabChecked(map, kind.GetProperty("token").GetString(), ppd, best.q,
+                                              ppd.Nodes.Select(n => best.origin + Vector3.Transform(n.Position, best.q)).ToList());
                     pf.Look = kind.GetProperty("look").GetString();
                     pf.Variant = dcfg.GetProperty("variants").TryGetProperty(d.GetProperty("kind").GetString(), out var vk) && vk.TryGetProperty(company, out var vr) ? vr.GetString() : "default";
                     foreach (var (arm, want) in new[] { (d.GetProperty("arm0"), n0), (d.GetProperty("arm1"), n1) })
@@ -485,6 +573,19 @@ internal static class Program
                     noBuild.Add((best.origin, 75f));
                     co.CompanyName = company;
                     co.CityName = d.TryGetProperty("city", out var dc) ? dc.GetString() : city;
+                    // oyun şehri öğenin konumundaki CityArea'dan belirler; ızgara alanıyla karşılaştır
+                    if (graph.TryGetProperty("city_areas", out var cal))
+                    {
+                        var o = best.origin; string areaTok = null;
+                        foreach (var a in cal.EnumerateArray())
+                        {
+                            var (ax0, az0) = (V(a.GetProperty("x0").GetDouble(), a.GetProperty("z0").GetDouble()).X, V(a.GetProperty("x0").GetDouble(), a.GetProperty("z0").GetDouble()).Z);
+                            var (ax1, az1) = (V(a.GetProperty("x1").GetDouble(), a.GetProperty("z1").GetDouble()).X, V(a.GetProperty("x1").GetDouble(), a.GetProperty("z1").GetDouble()).Z);
+                            if (o.X >= Math.Min(ax0, ax1) && o.X <= Math.Max(ax0, ax1) && o.Z >= Math.Min(az0, az1) && o.Z <= Math.Max(az0, az1)) { areaTok = a.GetProperty("token").GetString(); break; }
+                        }
+                        if (areaTok == null) Console.WriteLine($"UYARI depo {d.GetProperty("id")}: şirket öğesi hiçbir şehir alanında değil");
+                        else if (areaTok != co.CityName) { Console.WriteLine($"UYARI depo {d.GetProperty("id")}: grafik şehri {co.CityName}, oyun alanı {areaTok} → {areaTok}"); co.CityName = areaTok; }
+                    }
                     foreach (var sp in ppd.SpawnPoints)
                     {
                         var (dt, diff) = sp.Type switch
@@ -503,7 +604,21 @@ internal static class Program
                 }
                 catch (Exception ex) { Console.WriteLine($"depo {d.GetProperty("id")} atlandı: {ex.Message}"); }
             }
-            if (dcfg.GetProperty("city_area").GetBoolean() && graph.TryGetProperty("cities", out var clist))
+            if (dcfg.GetProperty("city_area").GetBoolean() && graph.TryGetProperty("city_areas", out var alist))
+            {
+                // Üst üste binmeyen ızgara alanları (build_city_graph.city_grid); her şehrin en büyük alanı UI'da adını gösterir
+                var areas = alist.EnumerateArray().Select(c => (tok: c.GetProperty("token").GetString(),
+                    x0: c.GetProperty("x0").GetDouble(), z0: c.GetProperty("z0").GetDouble(),
+                    x1: c.GetProperty("x1").GetDouble(), z1: c.GetProperty("z1").GetDouble())).ToList();
+                var label = areas.GroupBy(a => a.tok).ToDictionary(g => g.Key, g => g.OrderByDescending(a => (a.x1 - a.x0) * (a.z1 - a.z0)).First());
+                foreach (var a in areas)
+                {
+                    var ca = CityArea.Add(map, V((a.x0 + a.x1) / 2, (a.z0 + a.z1) / 2), a.tok, (float)(a.x1 - a.x0), (float)(a.z1 - a.z0));
+                    ca.ShowInUi = label[a.tok].Equals(a);
+                }
+                Console.WriteLine($"şehir alanı: {areas.Count} dikdörtgen ({string.Join(", ", areas.GroupBy(a => a.tok).Select(g => $"{g.Key}={g.Count()}"))})");
+            }
+            else if (dcfg.GetProperty("city_area").GetBoolean() && graph.TryGetProperty("cities", out var clist))
             {
                 // CityArea konumu alanın MERKEZİ (oyunda doğrulandı: köşe sanılınca doğu yarısı dışarıda kalıyordu)
                 foreach (var c in clist.EnumerateArray())
@@ -516,9 +631,50 @@ internal static class Program
             }
         }
 
+        // 1c) origin seçimi: TruckLib/ETS2'de prefab origin düğümüne yalnızca yolun BİTİŞ ucu bağlanabilir.
+        //     Her prefab için origin = boş kol > gelen tek yönlü yol > öbür ucu origin olmayan çift yönlü yol.
+        int originChanged = 0;
+        {
+            var kindOf = graph.GetProperty("edges").EnumerateArray().ToDictionary(x => x.GetProperty("id").GetInt32(), x => x.GetProperty("type").GetString());
+            bool OneWay(string k) => k.EndsWith("_oneway") || k == "ramp_1lane";
+            var byPf = attach.Where(kv => kv.Value.radius > 1f).GroupBy(kv => kv.Value.p, ReferenceEqualityComparer.Instance)
+                             .ToDictionary(g => (Prefab)g.Key, g => g.ToList());
+            int IdxAt(Prefab p, Vector3 pos) => p.Nodes.FindIndex(n => Vector3.DistanceSquared(n.Position, pos) < 0.01f);
+            bool OtherEndIsOrigin(int edge, string end)
+            {
+                var o = end == "a" ? "b" : "a";
+                return attach.TryGetValue((edge, o), out var x) && x.p != null && IdxAt(x.p, x.nodePos) == 0;
+            }
+            int Score(Prefab p, int k)
+            {
+                var pos = p.Nodes[k].Position;
+                var arms = byPf[p].Where(kv => Vector3.DistanceSquared(kv.Value.nodePos, pos) < 0.01f).ToList();
+                if (arms.Count == 0) return 3;
+                var (edge, end) = arms[0].Key;
+                if (OneWay(kindOf[edge])) return end == "b" ? 2 : -10;
+                return OtherEndIsOrigin(edge, end) ? 0 : 1;
+            }
+            for (int pass = 0; pass < 3; pass++)
+                foreach (var p in byPf.Keys)
+                {
+                    int cur = Score(p, 0), best = 0, bestS = cur;
+                    for (int k = 1; k < p.Nodes.Count; k++) { int sc = Score(p, k); if (sc > bestS) { bestS = sc; best = k; } }
+                    if (best != 0 && bestS > cur)
+                    {
+                        var want = p.Nodes[best].Position;
+                        p.ChangeOrigin((ushort)((p.Origin + best) % p.Nodes.Count)); // ChangeOrigin mutlak ppd indeksi alır
+                        if (Vector3.DistanceSquared(p.Nodes[0].Position, want) > 0.01f)
+                            throw new InvalidOperationException("ChangeOrigin beklenen düğümü origin yapmadı");
+                        originChanged++;
+                    }
+                }
+        }
+        Console.WriteLine($"prefab origin değiştirilen: {originChanged}");
+
         // 2) yollar
         float R = (float)graph.GetProperty("meta").GetProperty("prefab_radius").GetDouble() + 3f;
-        int roads = 0, segs = 0, skipped = 0, connected = 0;
+        var shortSkip = new Dictionary<string, int>();
+        int roads = 0, segs = 0, skipped = 0, connected = 0, failed = 0, reversedAtOrigin = 0, originUnattached = 0;
         foreach (var e in graph.GetProperty("edges").EnumerateArray().OrderBy(e => e.GetProperty("prio").GetInt32()))
         {
             int id = e.GetProperty("id").GetInt32();
@@ -537,7 +693,7 @@ internal static class Program
             if (hasA) seq.Add(sa.nodePos);
             foreach (var p in mid) if (seq.Count == 0 || Vector3.Distance(seq[^1], p) > 3f) seq.Add(p);
             if (hasB) { if (seq.Count > 0 && Vector3.Distance(seq[^1], sb.nodePos) < 3f) seq.RemoveAt(seq.Count - 1); seq.Add(sb.nodePos); }
-            if (seq.Count < 2) { skipped++; continue; }
+            if (seq.Count < 2) { skipped++; shortSkip[(hasA ? "A" : "-") + (hasB ? "B" : "-")] = shortSkip.GetValueOrDefault((hasA ? "A" : "-") + (hasB ? "B" : "-")) + 1; continue; }
             // oyun sınırı: tek yol parçası ≤ 1000 m; uzun parçaları ≤ 400 m'ye böl
             for (int i = seq.Count - 1; i > 0; i--)
             {
@@ -550,25 +706,48 @@ internal static class Program
                     for (int s = 1; s < k; s++) seq[i - 1 + s] = Vector3.Lerp(a0, b0, s / (float)k);
                 }
             }
+            // TruckLib: prefabın 0 numaralı (origin) düğümünde yol prefabta BİTER, diğer düğümlerde prefabtan BAŞLAR.
+            // Çift yönlü yol origin düğümünden başlıyorsa ters kurulur; tek yönlüde yön korunur ve uç sonradan bağlanır.
+            static int NodeIdx(Prefab p, Vector3 pos) => p.Nodes.FindIndex(n => Vector3.DistanceSquared(n.Position, pos) < 0.01f);
+            // yön yalnızca tek yönlü yol görünümlerinde (otoyol şeritleri, rampa) önemlidir
+            bool oneway = kind.EndsWith("_oneway") || kind == "ramp_1lane";
+            if (hasA && NodeIdx(sa.p, sa.nodePos) == 0 && !oneway && !(hasB && NodeIdx(sb.p, sb.nodePos) == 0))
+            {
+                seq.Reverse();
+                (sa, sb) = (sb, sa);
+                (hasA, hasB) = (hasB, hasA);
+                reversedAtOrigin++;
+            }
+            string stage = "start";
             try
             {
                 Road road;
-                if (hasA)
+                bool attachStartLater = false;
+                if (hasA && NodeIdx(sa.p, sa.nodePos) != 0)
                 {
-                    ushort ni = (ushort)sa.p.Nodes.FindIndex(n => Vector3.DistanceSquared(n.Position, sa.nodePos) < 0.01f);
-                    road = sa.p.AppendRoad(ni, seq[1], token, ts, ts);
+                    stage = "A:" + sa.p.Model;
+                    road = sa.p.AppendRoad((ushort)NodeIdx(sa.p, sa.nodePos), seq[1], token, ts, ts);
                     connected++;
                 }
-                else road = Road.Add(map, seq[0], seq[1], token, ts, ts);
+                else { road = Road.Add(map, seq[0], seq[1], token, ts, ts); attachStartLater = hasA; }
+                var firstRoad = road;
                 segs++;
+                stage = "append";
                 for (int i = 2; i < seq.Count; i++) { road = road.Append(seq[i]); segs++; }
+                stage = hasB ? "B:" + sb.p.Model : "end";
                 if (hasB) { sb.p.Attach(road); connected++; }
+                if (attachStartLater)
+                {
+                    stage = "A-origin:" + sa.p.Model;
+                    try { sa.p.Attach(firstRoad); connected++; }
+                    catch (Exception ex2) { originUnattached++; if (originUnattached < 10) Console.WriteLine($"kenar {id} ({kind}) origin ucu bağlanamadı: {ex2.Message}"); }
+                }
                 roads++;
             }
             catch (Exception ex)
             {
-                skipped++;
-                if (skipped < 15) Console.WriteLine($"kenar {id} atlandı: {ex.Message}");
+                skipped++; failed++;
+                if (failed < 40) Console.WriteLine($"kenar {id} ({kind}) atlandı [{stage}, seq={seq.Count}]: {ex.Message}");
             }
         }
 
@@ -582,8 +761,10 @@ internal static class Program
         var name = cfg.GetProperty("output_map_name").GetString();
         if (name == "saklaz" || name == "europe") throw new InvalidOperationException("Korumalı ad.");
         map.Save(outDir, name, true);
+        Console.WriteLine($"Prefab yerleşimi: yaw düzeltmeli {prefabFixed}, en kötü düğüm sapması {worstPrefabDev:F2} m; düzeltmeler: " + string.Join(", ", prefabYawFix.Where(kv => kv.Value != 0).Select(kv => $"{kv.Key}={kv.Value}°")));
+        Console.WriteLine("kısa atlanan kenarlar (uç bağlantısına göre): " + string.Join(", ", shortSkip.Select(kv => $"{kv.Key}={kv.Value}")));
         Console.WriteLine("Prefab dağılımı: " + string.Join(", ", byToken.Select(kv => $"{kv.Key}={kv.Value}")));
-        Console.WriteLine($"Kaydedildi: {name}.mbd  kavşak={placed} (reddedilen {rejected})  yol={roads} segment={segs} bağlantı={connected} atlanan={skipped} bina={buildings} zemin={ground} depo={depots}");
+        Console.WriteLine($"Kaydedildi: {name}.mbd  kavşak={placed} (reddedilen {rejected})  yol={roads} segment={segs} bağlantı={connected} atlanan={skipped} (hata {failed}, origin'de ters kurulan {reversedAtOrigin}, origin'e bağlanamayan {originUnattached}) bina={buildings} zemin={ground} depo={depots}");
         return 0;
     }
 

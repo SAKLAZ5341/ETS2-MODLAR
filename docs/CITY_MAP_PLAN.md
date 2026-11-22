@@ -210,3 +210,27 @@ Hedef: Gebze + Darıca + Dilovası, gerçekçi ve oynanabilir. Sıra:
 2. Önizleme (editör kapalıyken): `tools/play/play_saklaz.ps1`; logda "Company item without company assignment"
    olmamalı; D-100 çıkış/katılma prefablarında AI trafiği ve sürüş kontrolü.
 3. Paketi ayrı bir profilde etkinleştirip yeni profil oluştururken harita seçimini doğrula.
+
+## 18. Test turu ve bağlantı düzeltmeleri – 2026-11-22 02:15
+
+İlk test (editör tek başına, sonra önizleme tek başına):
+- Editör taşma vermedi; depo hatası ("Company item without company assignment") önizlemede **yok** → §17 şirket düzeltmesi doğrulandı.
+- Önizlemede 28 × `[traffic] Unable to determine output road lane 4`: `mod_ger_31` çıkış prefabı girişte 4 şerit bekliyor, ana yol 3 şeritti.
+
+Düzeltmeler:
+1. **Şerit eşleme** (`tools/geo/assign_hw_lanes.py`, `build_city_graph.py` sonunda otomatik çalışır): her otoyol kavşağı için hi/lo prefab seçilir; prefab düğümü ile yolun şerit sayısı birebir tutar.
+   - exit hi `mod_ger_31` (4 → 3 + rampa), exit lo `ch_2y016` (3 → 2 + rampa)
+   - merge hi `ch_4202j` (3 + rampa → 4), merge lo `ch_2y017` (2 + rampa → 3)
+   - yollar `hw2_oneway`=ger13, `hw3_oneway`=ger16, `hw4_oneway`=ger19. Sonuç: 62/62 kavşak; prefab arası parçalar 3 şerit: 50, 4 şerit: 43 (katılma→çıkış arası yardımcı şerit), 2 şerit: 5.
+2. **TruckLib prefab dönüşü**: `Prefab.Add` dönüşü düğüm 0'ın yönüne göre uyguluyor; düğüm 0'ı -Z'ye bakmayan prefablar ters/yan yerleşiyordu (mod_ger_67/63 270°, mod_ger_75/ch_4202j/ch_2y017 180°). `AddPrefabChecked` boş haritada deneyip düzeltme açısını bulur; en kötü düğüm sapması 0,00 m.
+3. **Origin düğüm kuralı**: prefabın origin düğümüne yalnızca yolun bitiş ucu bağlanabilir. Çift yönlü yollar origin'de ters kurulur; kalan çakışmalarda `ChangeOrigin` ile origin boş kola / gelen tek yönlü yola taşınır.
+   - Önce 680 yol sessizce bağlanamıyordu (kavşak ve otoyol kopuklukları). Şimdi: hata 0, bağlantı 1.660, 7.696 yol, 13.847 segment.
+4. Editörde *Map > Recompute map* bir onay penceresi açar (Yes = ekranın ortası); onaylanmadan çalışmaz. Recompute + Save sonrası "Terrain point count" hataları 0.
+5. **Depo / ekonomi**: önizlemede `Invalid company item assignment detected! [Company:X, City:Y]` + `Economy reset - company mismatch`.
+   - Şirket değiştirmek hatayı aynı depoya taşıdı → sorun şirket değil: oyun bir şehirde **aynı depo prefabını iki şirkete** eşleyemiyor (dilovasi'de iki `at_0j009` lojistik depo vardı).
+   - İkinci neden: ilçe sınır kutuları çakışıyordu (Gebze kutusu haritanın çoğunu kaplıyor); oyun öğenin şehrini CityArea'dan aldığı için Çayırova'daki depoyu Gebze'ye saydı. İlçe dışı hücrelerde alan yoktu → `Company item without company assignment`.
+   - Düzeltme: `city_grid` 250 m ızgaradan **üst üste binmeyen** 69 CityArea dikdörtgeni üretir (ilçe dışı hücreler en yakın ilçeye); depo şehri bu ızgaradan alınır; `place_depots` her (tür, şehir) çiftini benzersiz tutar (her noktada boşta olan türü dener). C# öğe konumunu alanlarla karşılaştırıp uyarır.
+   - Sonuç: 6 depo (tradeaux, trameri, stokes → Dilovası; kathode, posped, transinet → Çayırova), önizlemede şirket hatası yok. Gebze/Darıca'da uygun sanayi yolu bulunamadı (sonraki iş).
+   - Kalan `Economy reset - company mismatch` satırı hatasız tek başına her önizlemede çıkıyor (önizleme ilk kaydı `def/initial_save/preview` yok); gerçek profilde doğrulanacak.
+6. Sürüş: önizlemede klavyeyle sürüş çalışıyor. Oyun menüsü sentetik fare tıklamalarını almıyor (klavye Enter çalışıyor) → yeni profil + harita seçimi testi elle yapılmalı.
+7. Paket `releases/saklaz_turkiye_map_0.2.0-dev_20261122_0259.scs` (70 dosya); oyun `[zipfs] ... Created, 70 entries` ile manifest uyarısı olmadan yükledi. Kopyası kullanıcının `Belgeler\Euro Truck Simulator 2\mod\saklaz_turkiye_map_0.2.0-dev.scs`.

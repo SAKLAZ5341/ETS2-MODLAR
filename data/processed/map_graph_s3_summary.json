@@ -1,5 +1,5 @@
 {
-  "scale": 3.0,
+  "scale": 3,
   "edges": 7799,
   "segments": 14070,
   "graph_nodes": 18079,
@@ -17,11 +17,11 @@
   "junctions_X": 57,
   "depots": 6,
   "depot_companies": {
-    "stokes": 1,
     "tradeaux": 1,
     "trameri": 1,
-    "transinet": 1,
-    "lkwlog": 1,
-    "posped": 1
+    "kathode": 1,
+    "stokes": 1,
+    "posped": 1,
+    "transinet": 1
   }
 }

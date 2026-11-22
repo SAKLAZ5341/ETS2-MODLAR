@@ -2,6 +2,6 @@ SiiNunit
 {
 company_def : .gebze {
  city: gebze
- prefab: at_0j009
+ prefab: at_0j008
 }
 }
