@@ -282,3 +282,25 @@ Gebze/Darıca'ya depo; rampa↔şehir yolu bağlantıları; tüm Kocaeli.
 - Paket `releases/saklaz_turkiye_map_0.2.0-dev_20261122_1154.scs` (70 dosya) → `Belgeler\Euro Truck Simulator 2\mod\saklaz_turkiye_map_0.2.0-dev.scs`.
 
 Sonraki: tüm Kocaeli.
+
+## 21. Tüm Kocaeli – 2026-11-22 13:05
+
+- Veri: `tools/geo/fetch_kocaeli.py` → `data/raw/kocaeli/` (12 ilçe sınırı, motorway..tertiary, ilçe merkezlerinde
+  sokak ve bina, sanayi/liman, doğa, kıyı). Çekirdek (Gebze/Darıca/Çayırova/Dilovası) verisi değişmedi.
+- `build_city_graph.py`: çekirdekte tüm şehir yolları; il genelinde (12 ilçe sınırı ∪ çekirdek kutusu) ana yollar,
+  merkezlere ≤3 km köy yolları (tertiary), merkezlere ≤800 m sokaklar. Kırsal kenarlar sınıfa göre seyrek düğümlü ve
+  birleştirme sonrası yeniden sadeleştirilir. `--core-only` eski çekirdek haritayı üretir.
+- **Editör sınırı (ölçüldü):** "Parameter packet batch system overflow" tüm harita için: yaklaşık 3 × yol segmenti +
+  model parçası ≲ 65 bin. 27,4 bin ve 18,8 bin segment (+bina) çöktü; 18,8 bin binasız açıldı.
+  Bütçe: 16,2 bin segment + 9 bin parça bina (`clear_buildings.py --budget 9000 --close 120`: ana caddeye bakan
+  120 binada ayrıntılı model, gerisi 2–7 parçalı mid model; il merkezlerinden 832 bina dahil, toplam 1.384).
+- Zemin: çekirdek zemini `ground_core_s3.json`'dan aynen (yeniden üretilen geniş çekirdek zemini editörü
+  "Index outside array boundaries: 12 >= 12" ile çökertti); il geneli 512 m hücre, yola ≤900 m, ağaç yalnız ormanda
+  (yoğunluk ×0,35). C# zemin parçası genişliği/yoğunluğu `w`/`dens`. 2.689 zemin öğesi.
+- 12 şehir (`city.*`), etiket ilçe merkezini içeren alanda; 549 CityArea; 26 depo (her ilçede 2–3).
+- Sonuç: 775 kavşak (red 0), 168 otoyol çıkış/katılma, 5.676 yol, 16.225 segment, 2.929 bağlantı; editör recompute +
+  save hatasız; önizlemede harita/trafik/şirket hatası yok (1 prefab tabelası kayıt uyarısı).
+- Paket `releases/saklaz_turkiye_map_0.2.0-dev_20261122_1306.scs` (348 dosya) → kullanıcı mod klasörü.
+
+Sınırlar: köyler (merkezden >3 km tertiary) ve ilçe merkezleri dışındaki sokaklar bütçe nedeniyle yok; bina sayısı
+çekirdekte azaldı (2.489 → ~550 + il geneli 832).

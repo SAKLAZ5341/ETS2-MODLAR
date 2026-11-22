@@ -1,0 +1,6 @@
+city_data : city.karamursel
+{
+	city_name: "Karamürsel"
+	country: turkey
+	population: 60000
+}

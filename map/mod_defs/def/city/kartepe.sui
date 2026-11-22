@@ -1,0 +1,6 @@
+city_data : city.kartepe
+{
+	city_name: "Kartepe"
+	country: turkey
+	population: 135000
+}

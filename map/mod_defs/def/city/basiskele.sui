@@ -1,0 +1,6 @@
+city_data : city.basiskele
+{
+	city_name: "Başiskele"
+	country: turkey
+	population: 120000
+}

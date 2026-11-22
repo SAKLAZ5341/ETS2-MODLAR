@@ -1,0 +1,6 @@
+city_data : city.kandira
+{
+	city_name: "Kandıra"
+	country: turkey
+	population: 55000
+}

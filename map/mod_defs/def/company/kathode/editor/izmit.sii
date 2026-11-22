@@ -1,0 +1,7 @@
+SiiNunit
+{
+company_def : .izmit {
+ city: izmit
+ prefab: at_0j008
+}
+}

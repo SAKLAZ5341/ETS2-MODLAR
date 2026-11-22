@@ -68,12 +68,29 @@ def geom_polys(el, scale):
     return out
 
 
+def load_elements(name):
+    """Çekirdek (data/raw) + il geneli (data/raw/kocaeli) öğeleri, kimliğe göre tekil."""
+    out, seen = [], set()
+    for f in (RAW / f"{name}.json", RAW / "kocaeli" / f"{name}.json"):
+        if f.exists():
+            for el in json.loads(f.read_text(encoding="utf-8"))["elements"]:
+                if (el["type"], el["id"]) not in seen:
+                    seen.add((el["type"], el["id"]))
+                    out.append(el)
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--scale", type=float, default=3.0)
-    ap.add_argument("--cell", type=float, default=96.0, help="hücre kenarı (oyun m)")
+    ap.add_argument("--cell", type=float, default=96.0, help="çekirdek hücre kenarı (oyun m)")
+    ap.add_argument("--outer-cell", type=float, default=512.0, help="il geneli hücre kenarı (oyun m)")
+    ap.add_argument("--outer-reach", type=float, default=900.0, help="il geneli: yola en çok bu kadar uzak hücre (oyun m)")
     ap.add_argument("--margin", type=float, default=300.0, help="yol ağının dışına taşma (oyun m)")
     ap.add_argument("--smooth", type=int, default=2, help="çoğunluk filtresi tekrar sayısı")
+    ap.add_argument("--core-from", default="data/processed/ground_core_s3.json",
+                    help="çekirdek zemini bu dosyadan aynen al (bbox = çekirdek kutusu); yoksa yeniden üret. "
+                         "Yeniden üretilen geniş çekirdek zemini editörü 'Index outside array boundaries: 12 >= 12' ile çökertti")
     a = ap.parse_args()
     s = int(a.scale)
 
@@ -81,30 +98,38 @@ def main() -> None:
     lines = [LineString(e["pts"]) for e in graph["edges"] if len(e["pts"]) >= 2]
     xs = [p[0] for e in graph["edges"] for p in e["pts"]]
     zs = [p[1] for e in graph["edges"] for p in e["pts"]]
-    x0, x1 = min(xs) - a.margin, max(xs) + a.margin
-    z0, z1 = min(zs) - a.margin, max(zs) + a.margin
+    X0, X1 = min(xs) - a.margin, max(xs) + a.margin
+    Z0, Z1 = min(zs) - a.margin, max(zs) + a.margin
+    cxs = [p[0] for e in graph["edges"] if not e.get("outer") for p in e["pts"]]
+    czs = [p[1] for e in graph["edges"] if not e.get("outer") for p in e["pts"]]
+    core = (min(cxs) - a.margin, min(czs) - a.margin, max(cxs) + a.margin, max(czs) + a.margin)
+    core_runs = None
+    cf = ROOT / a.core_from if a.core_from else None
+    if cf is not None and cf.exists():
+        cg = json.loads(cf.read_text(encoding="utf-8"))
+        core, core_runs = tuple(cg["meta"]["bbox"]), cg["runs"]
+        print("çekirdek zemini:", cf.name, len(core_runs), "parça")
     road_tree = STRtree(lines)
-    area = box(x0, z0, x1, z1)
+    area = box(X0, Z0, X1, Z1)
 
     # 1) sınıf poligonları
     polys: list[tuple[Polygon, str]] = []
-    nature = json.loads((RAW / "nature.json").read_text(encoding="utf-8"))
-    for el in nature["elements"]:
+    for el in load_elements("nature"):
         tags = el.get("tags", {})
         cls = next((c for (k, v), c in NATURE.items() if tags.get(k) == v), None)
+        if tags.get("landuse") in ("residential", "industrial"):
+            cls = "urban"
         if cls:
             polys += [(p, cls) for p in geom_polys(el, a.scale) if p.intersects(area)]
-    landuse = json.loads((RAW / "landuse.json").read_text(encoding="utf-8"))
-    for el in landuse["elements"]:
+    for el in load_elements("landuse"):
         if el.get("tags", {}).get("landuse") or el.get("tags", {}).get("industrial"):
             polys += [(p, "urban") for p in geom_polys(el, a.scale) if p.intersects(area)]
     print("sınıf poligonları:", Counter(c for _, c in polys))
     ptree = STRtree([p for p, _ in polys])
 
     # 2) deniz: kıyı çizgileri alanı böler; deniz noktası içeren parçalar deniz
-    coast = json.loads((RAW / "rail_coast.json").read_text(encoding="utf-8"))
     clines = [LineString([proj(g["lon"], g["lat"], a.scale) for g in el["geometry"]])
-              for el in coast["elements"] if el.get("tags", {}).get("natural") == "coastline" and "geometry" in el]
+              for el in load_elements("rail_coast") if el.get("tags", {}).get("natural") == "coastline" and "geometry" in el]
     sea = None
     if clines:
         clipped = [l.intersection(area) for l in clines]
@@ -115,66 +140,85 @@ def main() -> None:
         print("kıyı parçaları:", len(pieces), "deniz:", len(sea_parts))
         sea = unary_union(sea_parts) if sea_parts else None
     print("deniz alanı (km² oyun):", round(sea.area / 1e6, 2) if sea is not None else 0)
+    from shapely.prepared import prep
+    sea_p = prep(sea) if sea is not None else None
 
-    # 3) hücre sınıflandırması
-    C = a.cell
-    nx, nz = int((x1 - x0) // C) + 1, int((z1 - z0) // C) + 1
-    grid = []
-    for i in range(nx):
-        col = []
-        for j in range(nz):
-            cx, cz = x0 + (i + 0.5) * C, z0 + (j + 0.5) * C
-            pt = Point(cx, cz)
-            if sea is not None and sea.contains(pt):
-                col.append(("sea", 0.0))
-                continue
-            best = "grass"
-            for k in ptree.query(pt):
-                p, c = polys[k]
-                if PRIO[c] > PRIO[best] and p.contains(pt):
-                    best = c
-            near = min(lines[k].distance(pt) for k in road_tree.query(pt.buffer(C * 1.5))) if len(road_tree.query(pt.buffer(C * 1.5))) else 1e9
-            col.append((best, near))
-        grid.append(col)
-    # çoğunluk filtresi: tek başına kalan hücreleri komşularına uydur (daha doğal sınırlar, daha az parça)
-    for _ in range(a.smooth):
-        g2 = [list(col) for col in grid]
+    def classify(x0, z0, nx, nz, C, outer):
+        grid = []
         for i in range(nx):
+            col = []
             for j in range(nz):
-                c, near = grid[i][j]
-                if c == "sea":
+                cx, cz = x0 + (i + 0.5) * C, z0 + (j + 0.5) * C
+                pt = Point(cx, cz)
+                if outer and core[0] <= cx <= core[2] and core[1] <= cz <= core[3]:
+                    col.append(("skip", 0.0))
                     continue
-                nb = Counter(grid[i + di][j + dj][0] for di in (-1, 0, 1) for dj in (-1, 0, 1)
-                             if 0 <= i + di < nx and 0 <= j + dj < nz and grid[i + di][j + dj][0] != "sea")
-                top, n = nb.most_common(1)[0]
-                if top != c and n >= 5 and c != "water":
-                    g2[i][j] = (top, near)
-        grid = g2
-    print("hücre:", nx, "x", nz, Counter(c for col in grid for c, _ in col))
+                if sea_p is not None and sea_p.contains(pt):
+                    col.append(("sea", 0.0))
+                    continue
+                q = road_tree.query(pt.buffer(a.outer_reach if outer else C * 1.5))
+                near = min(lines[k].distance(pt) for k in q) if len(q) else 1e9
+                if outer and near > a.outer_reach:
+                    col.append(("skip", 0.0))
+                    continue
+                best = "grass"
+                for k in ptree.query(pt):
+                    p, c = polys[k]
+                    if PRIO[c] > PRIO[best] and p.contains(pt):
+                        best = c
+                col.append((best, near))
+            grid.append(col)
+        # çoğunluk filtresi: tek başına kalan hücreleri komşularına uydur (daha doğal sınırlar, daha az parça)
+        for _ in range(a.smooth):
+            g2 = [list(col) for col in grid]
+            for i in range(nx):
+                for j in range(nz):
+                    c, near = grid[i][j]
+                    if c in ("sea", "skip"):
+                        continue
+                    nb = Counter(grid[i + di][j + dj][0] for di in (-1, 0, 1) for dj in (-1, 0, 1)
+                                 if 0 <= i + di < nx and 0 <= j + dj < nz and grid[i + di][j + dj][0] not in ("sea", "skip"))
+                    top, n = nb.most_common(1)[0]
+                    if top != c and n >= 5 and c != "water":
+                        g2[i][j] = (top, near)
+            grid = g2
+        print("hücre:", nx, "x", nz, "C", C, Counter(c for col in grid for c, _ in col))
 
-    # 4) sütun parçaları: (sınıf, ağaçlı mı) aynı olan ardışık hücreler
-    def key(c, near):
-        if c == "sea":
-            return None
-        trees = c in ("forest", "scrub", "park", "grass") and near > C * 0.75 + 12
-        return (c, trees)
+        def key(c, near):
+            if c in ("sea", "skip"):
+                return None
+            if outer:  # il geneli: yalnız orman ağaçlı (çizim bütçesi)
+                return (c, c == "forest" and near > 40)
+            trees = c in ("forest", "scrub", "park", "grass") and near > C * 0.75 + 12
+            return (c, trees)
 
-    runs = []
-    for i, col in enumerate(grid):
-        j = 0
-        while j < nz:
-            k = key(*col[j])
-            j2 = j
-            while j2 + 1 < nz and key(*col[j2 + 1]) == k:
-                j2 += 1
-            if k is not None:
-                runs.append({"x": round(x0 + (i + 0.5) * C, 2), "z0": round(z0 + j * C, 2),
-                             "z1": round(z0 + (j2 + 1) * C, 2), "cls": k[0], "trees": k[1]})
-            j = j2 + 1
-    meta = {"scale_divisor": a.scale, "cell": C, "bbox": [x0, z0, x1, z1],
+        runs = []
+        for i, col in enumerate(grid):
+            j = 0
+            while j < nz:
+                k = key(*col[j])
+                j2 = j
+                while j2 + 1 < nz and key(*col[j2 + 1]) == k:
+                    j2 += 1
+                if k is not None:
+                    r = {"x": round(x0 + (i + 0.5) * C, 2), "z0": round(z0 + j * C, 2),
+                         "z1": round(z0 + (j2 + 1) * C, 2), "cls": k[0], "trees": k[1], "w": C / 2}
+                    if outer:
+                        r["dens"] = 0.35
+                    runs.append(r)
+                j = j2 + 1
+        return runs
+
+    C = a.cell
+    runs = core_runs if core_runs is not None else         classify(core[0], core[1], int((core[2] - core[0]) // C) + 1, int((core[3] - core[1]) // C) + 1, C, False)
+    nc = len(runs)
+    CO = a.outer_cell
+    runs += classify(X0, Z0, int((X1 - X0) // CO) + 1, int((Z1 - Z0) // CO) + 1, CO, True)
+    meta = {"scale_divisor": a.scale, "cell": C, "outer_cell": CO, "bbox": [X0, Z0, X1, Z1], "core": core,
             "attribution": "(c) OpenStreetMap contributors, ODbL 1.0"}
     (OUT / f"ground_s{s}.json").write_text(json.dumps({"meta": meta, "runs": runs}, ensure_ascii=False), encoding="utf-8")
-    print("parça:", len(runs), Counter((r["cls"], r["trees"]) for r in runs).most_common(12))
+    print("parça: çekirdek", nc, "il geneli", len(runs) - nc,
+          "uzunluk toplamı (km)", round(sum(r["z1"] - r["z0"] for r in runs) / 1000, 1))
 
 
 if __name__ == "__main__":

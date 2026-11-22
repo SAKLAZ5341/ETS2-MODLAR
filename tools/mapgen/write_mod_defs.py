@@ -14,7 +14,8 @@ ROOT = Path(__file__).resolve().parents[2]
 G = json.loads((ROOT / "data" / "processed" / "map_graph_s3.json").read_text(encoding="utf-8"))
 M = ROOT / "map" / "mod_defs" / "def"
 INSTALL = Path(r"D:\SAKLAZ_DEV\Euro Truck Simulator 2\mod\user_map\def")
-POP = {"gebze": 400000, "darica": 220000, "cayirova": 150000, "dilovasi": 50000}
+POP = {"gebze": 400000, "darica": 220000, "cayirova": 150000, "dilovasi": 50000, "izmit": 370000, "korfez": 180000,
+       "derince": 150000, "golcuk": 175000, "karamursel": 60000, "kandira": 55000, "kartepe": 135000, "basiskele": 120000}
 PREFAB = {"generic": "at_0j004", "logistic": "at_0j009", "light_factory": "at_0j008"}
 
 if M.exists():

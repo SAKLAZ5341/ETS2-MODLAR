@@ -22,6 +22,7 @@ from pathlib import Path
 
 from pyproj import Transformer
 from shapely.geometry import LineString, box
+from shapely.ops import unary_union
 
 sys.stdout.reconfigure(encoding="utf-8")
 ROOT = Path(__file__).resolve().parents[2]
@@ -38,6 +39,22 @@ ROADMAP = {
     "living_street": ("r1_city_narrow", 8), "road": ("r1_city_narrow", 8), "service": ("service", 9),
 }
 CITY = {"r1_city", "r1_city_narrow"}
+MAIN_HW = {"motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link", "secondary",
+           "secondary_link", "tertiary", "tertiary_link"}
+
+
+def load_province():
+    """Kocaeli il sınırı (12 ilçe birleşimi), UTM; yoksa None (yalnız çekirdek)."""
+    f = RAW / "kocaeli" / "districts.json"
+    if not f.exists():
+        return None
+    from shapely.ops import polygonize
+    polys = []
+    for el in json.loads(f.read_text(encoding="utf-8"))["elements"]:
+        lines = [LineString([T.transform(q["lon"], q["lat"]) for q in m["geometry"]])
+                 for m in el.get("members", []) if m.get("role") == "outer" and "geometry" in m]
+        polys += list(polygonize(unary_union(lines)))
+    return unary_union(polys).buffer(30).simplify(30)
 R2 = {"r2_divided"}
 cls = lambda t: "r2" if t in R2 else ("r1" if t in CITY else None)
 # izin verilen (r1 sayısı, r2 sayısı) desenleri -> prefab var
@@ -55,26 +72,63 @@ def main() -> None:
     ap.add_argument("--min-junction-gap", type=float, default=55.0)
     ap.add_argument("--min-hw-gap", type=float, default=70.0, help="otoyol çıkış/katılma prefabları arası en az (oyun m)")
     ap.add_argument("--hw-prefab-len", type=float, default=40.0, help="otoyol çıkış/katılma prefab uzunluğu (oyun m)")
-    ap.add_argument("--drop-deadend-len", type=float, default=60.0, help="bu uzunluktan kısa çıkmaz ara sokakları at (oyun m; 0=kapalı)")
+    ap.add_argument("--drop-deadend-len", type=float, default=90.0, help="bu uzunluktan kısa çıkmaz ara sokakları at (oyun m; 0=kapalı)")
     ap.add_argument("--no-collapse", action="store_true", help="bölünmüş caddeleri tek hatta indirgeme")
+    ap.add_argument("--core-only", action="store_true", help="yalnız Gebze/Darıca/Çayırova/Dilovası çekirdeği")
+    ap.add_argument("--tertiary-radius", type=float, default=3000.0, help="il geneli tertiary: merkeze en çok (gerçek m)")
+    ap.add_argument("--street-radius", type=float, default=800.0, help="il geneli sokaklar: merkeze en çok (gerçek m)")
     a = ap.parse_args()
     S = a.scale
     s, w, n, e = CFG["core_bbox_swne"]
     core = box(*T.transform(w, s), *T.transform(e, n))
 
     # 1) yolları yükle (UTM), kullanım sayısı
-    ways = []
-    for wy in json.loads((RAW / "roads.json").read_text(encoding="utf-8"))["elements"]:
+    #    Çekirdek (core_bbox): tüm şehir yolları. İl geneli (data/raw/kocaeli): ana yollar (motorway..tertiary)
+    #    ve ilçe merkezlerindeki sokaklar; il sınırı (12 ilçe) ∪ çekirdek kutusuna kırpılır.
+    prov = None if a.core_only else load_province()
+    region_prov = core if prov is None else unary_union([prov, core])
+    ways, seen_ids = [], set()
+
+    def add_way(wy, reg):
         t = wy.get("tags", {})
         hw = t.get("highway")
-        if hw not in ROADMAP or hw in a.exclude:
-            continue
+        if hw not in ROADMAP or hw in a.exclude or wy["id"] in seen_ids:
+            return
         if hw == "service" and t.get("service") not in (None, "", "alley"):
-            continue
+            return
         pts = [T.transform(p["lon"], p["lat"]) for p in wy["geometry"]]
-        if not LineString(pts).intersects(core):
-            continue
-        ways.append((wy, t, hw, [(round(x, 2), round(y, 2)) for x, y in pts]))
+        if not LineString(pts).intersects(core if reg == "core" else region_prov):
+            return
+        seen_ids.add(wy["id"])
+        ways.append((dict(wy, _reg=reg), t, hw, [(round(x, 2), round(y, 2)) for x, y in pts]))
+
+    for wy in json.loads((RAW / "roads.json").read_text(encoding="utf-8"))["elements"]:
+        hw = wy.get("tags", {}).get("highway")
+        add_way(wy, "prov" if prov is not None and hw in MAIN_HW else "core")
+    if prov is not None:
+        n0 = len(ways)
+        # Editör "Parameter packet batch system overflow" sınırı tüm harita için geçerli (27 bin segment çöktü,
+        # ~14 bin sorunsuz): il genelinde köy yolları (tertiary) yalnız ilçe merkezlerinin yakınında.
+        from shapely.geometry import Point as _P
+        cen = json.loads((RAW / "kocaeli" / "centers.json").read_text(encoding="utf-8"))
+        cpts = [_P(*T.transform(lo, la)) for la, lo in cen.values()]
+        skipped = 0
+        for f in ("roads.json", "streets.json"):
+            for wy in json.loads((RAW / "kocaeli" / f).read_text(encoding="utf-8"))["elements"]:
+                hw = wy.get("tags", {}).get("highway", "")
+                if f == "streets.json" and wy["id"] not in seen_ids:
+                    ln = LineString([T.transform(q["lon"], q["lat"]) for q in wy["geometry"]])
+                    if min(ln.distance(c) for c in cpts) > a.street_radius:
+                        skipped += 1
+                        continue
+                if hw.startswith("tertiary") and wy["id"] not in seen_ids:
+                    ln = LineString([T.transform(q["lon"], q["lat"]) for q in wy["geometry"]])
+                    if min(ln.distance(c) for c in cpts) > a.tertiary_radius:
+                        skipped += 1
+                        continue
+                add_way(wy, "prov")
+        print(f"il geneli: merkezlerden uzak köy yolu atlandı: {skipped}")
+        print(f"il geneli yol: +{len(ways) - n0} (çekirdek {n0})")
     if not a.no_collapse:  # bölünmüş şehir caddeleri → tek çift yönlü orta hat (collapse_dual.py)
         import collapse_dual
         ways, cst = collapse_dual.collapse(ways, ROADMAP)
@@ -87,6 +141,8 @@ def main() -> None:
     # 2) kesişimlerden böl, çekirdek alana kırp, sadeleştir
     g = lambda x, y: (round((x - E0) / S, 3), round(-(y - N0) / S, 3))
     edges, node_id, nodes = [], {}, []
+    from shapely.prepared import prep
+    region_prep = prep(region_prov)
 
     def nid(p):
         if p not in node_id:
@@ -102,30 +158,43 @@ def main() -> None:
             if len(seg) < 2:
                 continue
             ln = LineString(seg)
-            if not core.contains(ln):
-                if not ln.intersects(core):
+            reg = core if wy.get("_reg") == "core" else region_prov
+            parts = [seg]
+            if not (reg is core and core.contains(ln)) and not (reg is not core and region_prep.contains(ln)):
+                if not ln.intersects(reg):
                     continue
-                inter = ln.intersection(core)
-                if inter.geom_type != "LineString" or inter.length < 6:
+                inter = ln.intersection(reg)
+                geoms = [inter] if inter.geom_type == "LineString" else                     [x for x in getattr(inter, "geoms", []) if x.geom_type == "LineString"]
+                parts = [[(round(x, 2), round(y, 2)) for x, y in gg.coords] for gg in geoms if gg.length >= 6]
+            for seg in parts:
+                outer = not core.contains(LineString(seg).interpolate(0.5, normalized=True))
+                # il geneli: kırsal yollar daha seyrek düğümle (ETS2 yolu düğümler arasında eğri çizer); bütçe
+                if not outer and hw in ("residential", "unclassified", "road"):
+                    tol, mseg = a.simplify_m * 1.4, a.min_seg * 1.6  # ara sokak: bütçe
+                elif not outer:
+                    tol, mseg = a.simplify_m, a.min_seg
+                elif hw.startswith(("tertiary", "secondary")):
+                    tol, mseg = a.simplify_m * 8, a.min_seg * 7
+                elif hw in ("residential", "unclassified"):
+                    tol, mseg = a.simplify_m * 4, a.min_seg * 3
+                else:
+                    tol, mseg = a.simplify_m * 5, a.min_seg * 5
+                simp = list(LineString(seg).simplify(tol).coords)
+                gpts = [g(x, y) for x, y in simp]
+                out = [gpts[0]]
+                for c in gpts[1:-1]:
+                    if math.dist(out[-1], c) >= mseg and math.dist(c, gpts[-1]) >= mseg:
+                        out.append(c)
+                out.append(gpts[-1])
+                L = sum(math.dist(p, q) for p, q in zip(out, out[1:]))
+                if L < 2.0:
                     continue
-                ln = inter
-                seg = [(round(x, 2), round(y, 2)) for x, y in ln.coords]
-            simp = list(LineString(seg).simplify(a.simplify_m).coords)
-            gpts = [g(x, y) for x, y in simp]
-            out = [gpts[0]]
-            for c in gpts[1:-1]:
-                if math.dist(out[-1], c) >= a.min_seg and math.dist(c, gpts[-1]) >= a.min_seg:
-                    out.append(c)
-            out.append(gpts[-1])
-            L = sum(math.dist(p, q) for p, q in zip(out, out[1:]))
-            if L < 2.0:
-                continue
-            if kind == "hw3_divided" and t.get("oneway") in ("yes", "1"):
-                kind = "hw3_oneway"  # OSM'de her yön ayrı çizili: tek yönlü otoyol şeridi
-            edges.append({"id": len(edges), "osm": wy["id"], "hw": hw, "type": kind, "prio": prio,
-                          "name": t.get("name"), "oneway": t.get("oneway") in ("yes", "1", "-1"),
-                          "reverse": t.get("oneway") == "-1", "a": nid(seg[0]), "b": nid(seg[-1]),
-                          "len": round(L, 1), "pts": out})
+                if kind == "hw3_divided" and t.get("oneway") in ("yes", "1"):
+                    kind = "hw3_oneway"  # OSM'de her yön ayrı çizili: tek yönlü otoyol şeridi
+                edges.append({"id": len(edges), "osm": wy["id"], "hw": hw, "type": kind, "prio": prio,
+                              "name": t.get("name"), "oneway": t.get("oneway") in ("yes", "1", "-1"),
+                              "reverse": t.get("oneway") == "-1", "a": nid(seg[0]), "b": nid(seg[-1]),
+                              "len": round(L, 1), "pts": out, "outer": outer})
 
     # 2b) Çok kısa kenarları (< 4 oyun m) daralt: iki ucu tek düğüm olur. C# 3 m'den kısa yolu kuramıyor
     #     ve atlıyordu → ağda boşluk (çoğu bölünmüş cadde indirgemesinin yakalama artığı).
@@ -379,6 +448,20 @@ def main() -> None:
     #     tek kenarda birleştirilir; 3-4 kollu kesişimde ana yol kesintisiz geçer, kalan kol orada biter.
     jnodes = {j["node"] for j in chosen} | {h["node"] for h in hwj}
     edges, road_links = link_through(edges, chosen + hwj, jnodes, arm_dir)
+    # il geneli kenarlar: birleştirme sonrası ara düğümler (eski kesişimler) yeniden sadeleştirilir (segment bütçesi)
+    before = sum(len(e["pts"]) - 1 for e in edges)
+    for e in edges:
+        if e.get("outer") and len(e["pts"]) > 2:
+            tol = 12.0 if e["hw"].startswith(("tertiary", "secondary", "primary", "trunk", "motorway")) else 6.0
+            mseg = 40.0 if tol > 10 else 20.0
+            ps = [tuple(c) for c in LineString(e["pts"]).simplify(tol).coords]
+            o = [ps[0]]
+            for c in ps[1:-1]:
+                if math.dist(o[-1], c) >= mseg and math.dist(c, ps[-1]) >= mseg:
+                    o.append(c)
+            o.append(ps[-1])
+            e["pts"] = [list(c) for c in o]
+    print(f"il geneli yeniden sadeleştirme: segment {before} -> {sum(len(e['pts']) - 1 for e in edges)}")
 
     # 5) Şirket depoları: sanayi alanlarında, düz ve uzun bir şehir yolu parçasının yanına iki düğümlü depo
     #    prefabı. Parça ikiye bölünür; depo düğümleri iki yeni kenar ucuna gelir.
@@ -406,7 +489,9 @@ def main() -> None:
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
-CITY_TOKENS = {"Gebze": "gebze", "Darıca": "darica", "Çayırova": "cayirova", "Dilovası": "dilovasi"}
+CITY_TOKENS = {"Gebze": "gebze", "Darıca": "darica", "Çayırova": "cayirova", "Dilovası": "dilovasi",
+               "İzmit": "izmit", "Körfez": "korfez", "Derince": "derince", "Gölcük": "golcuk",
+               "Karamürsel": "karamursel", "Kandıra": "kandira", "Kartepe": "kartepe", "Başiskele": "basiskele"}
 
 LOOK_GROUP = {"r1_city": "r1", "r1_city_narrow": "r1", "service": "r1", "r2_divided": "r2",
               "ramp_1lane": "ramp", "hw3_oneway": "hw3", "hw3_divided": "hw3d"}
@@ -544,7 +629,10 @@ def load_city_polys(S):
     from shapely.ops import polygonize, unary_union
     g = lambda x, y: ((x - E0) / S, -(y - N0) / S)
     polys = {}
-    for el in json.loads((RAW / "districts.json").read_text(encoding="utf-8"))["elements"]:
+    src = RAW / "kocaeli" / "districts.json"
+    if not src.exists():
+        src = RAW / "districts.json"
+    for el in json.loads(src.read_text(encoding="utf-8"))["elements"]:
         tok = CITY_TOKENS.get(el.get("tags", {}).get("name"))
         if not tok:
             continue
@@ -629,6 +717,15 @@ def assign_cities(depots, edges, S):
         rp = part.representative_point()
         cities.append({"token": tok, "name": name, "x0": round(x0, 1), "z0": round(z0, 1),
                        "x1": round(x1, 1), "z1": round(z1, 1), "cx": round(rp.x, 1), "cz": round(rp.y, 1)})
+    # şehir adı etiketi ilçe merkezinde (places town/city): dünya haritasında doğru yerde görünsün
+    cf = RAW / "kocaeli" / "centers.json"
+    if cf.exists():
+        cen = json.loads(cf.read_text(encoding="utf-8"))
+        for c in cities:
+            if c["name"] in cen:
+                la, lo = cen[c["name"]]
+                x, y = T.transform(lo, la)
+                c["center"] = [round((x - E0) / S, 1), round(-(y - N0) / S, 1)]
     rects = city_grid(edges, S)
     for d in depots:
         d["city"] = grid_city(rects, d["body"])
@@ -663,8 +760,14 @@ def place_depots(edges, chosen, S, a, per_city=3, min_gap=250.0, links=()):
     from shapely.strtree import STRtree
 
     g = lambda x, y: ((x - E0) / S, -(y - N0) / S)
-    inds = []
-    for el in json.loads((RAW / "landuse.json").read_text(encoding="utf-8"))["elements"]:
+    inds, lu_seen = [], set()
+    lu = json.loads((RAW / "landuse.json").read_text(encoding="utf-8"))["elements"]
+    if (RAW / "kocaeli" / "landuse.json").exists():
+        lu += json.loads((RAW / "kocaeli" / "landuse.json").read_text(encoding="utf-8"))["elements"]
+    for el in lu:
+        if el["id"] in lu_seen:
+            continue
+        lu_seen.add(el["id"])
         t = el.get("tags", {})
         if el["type"] == "way" and "geometry" in el and (t.get("landuse") == "industrial" or t.get("industrial")):
             pts = [g(*T.transform(p["lon"], p["lat"])) for p in el["geometry"]]

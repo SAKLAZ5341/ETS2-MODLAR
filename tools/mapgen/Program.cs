@@ -611,7 +611,15 @@ internal static class Program
                 var areas = alist.EnumerateArray().Select(c => (tok: c.GetProperty("token").GetString(),
                     x0: c.GetProperty("x0").GetDouble(), z0: c.GetProperty("z0").GetDouble(),
                     x1: c.GetProperty("x1").GetDouble(), z1: c.GetProperty("z1").GetDouble())).ToList();
-                var label = areas.GroupBy(a => a.tok).ToDictionary(g => g.Key, g => g.OrderByDescending(a => (a.x1 - a.x0) * (a.z1 - a.z0)).First());
+                // etiket: ilçe merkezini (cities[].center) içeren alan; yoksa şehrin en büyük alanı
+                var centers = new Dictionary<string, (double x, double z)>();
+                if (graph.TryGetProperty("cities", out var cl2))
+                    foreach (var c in cl2.EnumerateArray())
+                        if (c.TryGetProperty("center", out var cc)) centers[c.GetProperty("token").GetString()] = (cc[0].GetDouble(), cc[1].GetDouble());
+                var label = areas.GroupBy(a => a.tok).ToDictionary(g => g.Key, g =>
+                    centers.TryGetValue(g.Key, out var ct) && g.Any(a => ct.x >= a.x0 && ct.x <= a.x1 && ct.z >= a.z0 && ct.z <= a.z1)
+                        ? g.First(a => ct.x >= a.x0 && ct.x <= a.x1 && ct.z >= a.z0 && ct.z <= a.z1)
+                        : g.OrderByDescending(a => (a.x1 - a.x0) * (a.z1 - a.z0)).First());
                 foreach (var a in areas)
                 {
                     var ca = CityArea.Add(map, V((a.x0 + a.x1) / 2, (a.z0 + a.z1) / 2), a.tok, (float)(a.x1 - a.x0), (float)(a.z1 - a.z0));
@@ -884,7 +892,7 @@ internal static class Program
     {
         if (!File.Exists(groundPath) || !cfg.TryGetProperty("ground", out var g)) return 0;
         var ground = JsonDocument.Parse(File.ReadAllText(groundPath)).RootElement;
-        float half = (float)ground.GetProperty("meta").GetProperty("cell").GetDouble() / 2f;
+        float halfDefault = (float)ground.GetProperty("meta").GetProperty("cell").GetDouble() / 2f;
         float y = (float)g.GetProperty("y").GetDouble();
         float maxSeg = (float)g.GetProperty("max_segment").GetDouble();
         var classes = g.GetProperty("classes");
@@ -896,8 +904,12 @@ internal static class Program
             if (!classes.TryGetProperty(cls, out var cc)) continue;
             bool trees = r.GetProperty("trees").GetBoolean();
             float x = (float)r.GetProperty("x").GetDouble(), z0 = (float)r.GetProperty("z0").GetDouble(), z1 = (float)r.GetProperty("z1").GetDouble();
+            // il geneli iri hücreler: genişlik ve bitki yoğunluğu parça başına (build_ground.py "w", "dens")
+            float half = r.TryGetProperty("w", out var rw) ? (float)rw.GetDouble() : halfDefault;
+            float dens = r.TryGetProperty("dens", out var rd) ? (float)rd.GetDouble() : 1f;
+            float segLen = half > 100 ? Math.Max(maxSeg, 600f) : maxSeg;
             // -Z yönünde ilerle (z1 → z0): sol taraf -X, sağ taraf +X
-            int segs = Math.Max(1, (int)MathF.Ceiling((z1 - z0) / maxSeg));
+            int segs = Math.Max(1, (int)MathF.Ceiling((z1 - z0) / segLen));
             try
             {
                 var mat = cc.GetProperty("material").GetString();
@@ -914,7 +926,7 @@ internal static class Program
                         if (trees && cc.TryGetProperty("vegetation", out var veg))
                         {
                             side.Vegetation[0].Name = veg.GetString();
-                            side.Vegetation[0].Density = (float)cc.GetProperty("density").GetDouble();
+                            side.Vegetation[0].Density = (float)cc.GetProperty("density").GetDouble() * dens;
                             side.Vegetation[0].Scale = VegetationScale.Percent80to120;
                             side.Vegetation[0].From = 0;
                             side.Vegetation[0].To = half;

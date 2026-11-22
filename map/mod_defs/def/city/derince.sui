@@ -1,0 +1,6 @@
+city_data : city.derince
+{
+	city_name: "Derince"
+	country: turkey
+	population: 150000
+}

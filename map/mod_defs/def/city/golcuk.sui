@@ -1,0 +1,6 @@
+city_data : city.golcuk
+{
+	city_name: "Gölcük"
+	country: turkey
+	population: 175000
+}

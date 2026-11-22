@@ -1,0 +1,6 @@
+city_data : city.izmit
+{
+	city_name: "İzmit"
+	country: turkey
+	population: 370000
+}

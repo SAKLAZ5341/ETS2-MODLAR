@@ -1,0 +1,7 @@
+SiiNunit
+{
+company_def : .basiskele {
+ city: basiskele
+ prefab: at_0j009
+}
+}

@@ -1,0 +1,6 @@
+city_data : city.korfez
+{
+	city_name: "Körfez"
+	country: turkey
+	population: 180000
+}

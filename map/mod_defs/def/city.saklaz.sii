@@ -1,7 +1,15 @@
 SiiNunit
 {
+@include "city/kartepe.sui"
 @include "city/cayirova.sui"
 @include "city/dilovasi.sui"
+@include "city/karamursel.sui"
 @include "city/darica.sui"
+@include "city/kandira.sui"
+@include "city/korfez.sui"
+@include "city/izmit.sui"
+@include "city/golcuk.sui"
+@include "city/derince.sui"
 @include "city/gebze.sui"
+@include "city/basiskele.sui"
 }
