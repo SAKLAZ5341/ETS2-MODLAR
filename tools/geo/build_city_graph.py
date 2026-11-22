@@ -56,7 +56,9 @@ def load_province():
         polys += list(polygonize(unary_union(lines)))
     return unary_union(polys).buffer(30).simplify(30)
 R2 = {"r2_divided"}
-cls = lambda t: "r2" if t in R2 else ("r1" if t in CITY else None)
+# kavşak prefabı sınıfı; şehir içi rampalar (bağlantı yolları) r1 sayılır: aksi halde rampa kesişimleri prefabsız
+# kalıp ağ kopuyordu (yeni profilde "No valid offers found for player's HQ city" → oyun kapanıyordu, 2026-11-22)
+cls = lambda t: "r2" if t in R2 else ("r1" if t in CITY or t == "ramp_1lane" else None)
 # izin verilen (r1 sayısı, r2 sayısı) desenleri -> prefab var
 PATTERNS = {(3, 0), (2, 1), (1, 2), (0, 3), (4, 0), (0, 4)}
 
@@ -70,11 +72,12 @@ def main() -> None:
     ap.add_argument("--prefab-radius", type=float, default=18.0, help="prefab merkez-düğüm mesafesi (oyun m)")
     ap.add_argument("--min-arm", type=float, default=24.0, help="kol başına en az kenar uzunluğu (oyun m)")
     ap.add_argument("--min-junction-gap", type=float, default=55.0)
-    ap.add_argument("--min-hw-gap", type=float, default=70.0, help="otoyol çıkış/katılma prefabları arası en az (oyun m)")
+    ap.add_argument("--min-hw-gap", type=float, default=50.0, help="otoyol çıkış/katılma prefabları arası en az (oyun m)")
     ap.add_argument("--hw-prefab-len", type=float, default=40.0, help="otoyol çıkış/katılma prefab uzunluğu (oyun m)")
     ap.add_argument("--drop-deadend-len", type=float, default=90.0, help="bu uzunluktan kısa çıkmaz ara sokakları at (oyun m; 0=kapalı)")
     ap.add_argument("--no-collapse", action="store_true", help="bölünmüş caddeleri tek hatta indirgeme")
     ap.add_argument("--core-only", action="store_true", help="yalnız Gebze/Darıca/Çayırova/Dilovası çekirdeği")
+    ap.add_argument("--connect-iters", type=int, default=12, help="bağlanamayan kesişimlerde sokak kaldırma turu")
     ap.add_argument("--tertiary-radius", type=float, default=3000.0, help="il geneli tertiary: merkeze en çok (gerçek m)")
     ap.add_argument("--no-villages", dest="villages", action="store_false", help="merkezden uzak köy yollarını alma")
     ap.add_argument("--street-radius", type=float, default=800.0, help="il geneli sokaklar: merkeze en çok (gerçek m)")
@@ -237,26 +240,6 @@ def main() -> None:
         print(f"çok kısa kenar daraltıldı: {short} (kenar {len(edges)} -> {len(keep)})")
         edges = keep
 
-    # 3) düğüm dereceleri ve kavşak adayları
-    inc = defaultdict(list)
-    for ed in edges:
-        inc[ed["a"]].append((ed, "a"))
-        inc[ed["b"]].append((ed, "b"))
-
-    def arm_dir(ed, end):
-        pts = ed["pts"] if end == "a" else ed["pts"][::-1]
-        o = pts[0]
-        acc = 0.0
-        tgt = pts[-1]
-        for p, q in zip(pts, pts[1:]):  # ~15 m ilerideki nokta
-            acc += math.dist(p, q)
-            if acc >= 15:
-                tgt = q
-                break
-        dx, dz = tgt[0] - o[0], tgt[1] - o[1]
-        L = math.hypot(dx, dz) or 1
-        return [round(dx / L, 4), round(dz / L, 4)]
-
     # C# üreticinin prefab açısı tutmadığı için reddettiği kavşak düğümleri (junction_rejects.json) birikimli
     # olarak dışlanır; bu düğümler 4c'de düz geçiş olarak bağlanır.
     excl_path = ROOT / "data" / "processed" / "junction_excluded.json"
@@ -266,77 +249,149 @@ def main() -> None:
         excluded |= set(json.loads(rej_path.read_text()))
         excl_path.write_text(json.dumps(sorted(excluded)))
         rej_path.unlink()
-    # Kol zinciri: kavşak düğümünden çıkan kenar, 2 dereceli ve aynı görünüm grubundaki (r1/r2) düğümlerden
-    # geçerek devam eder; bu düğümler 4c'de tek yola birleştirildiği için kolun gerçek uzunluğu zincirdir.
-    # (Önceden ilk OSM parçasının uzunluğu ölçülüyordu: ~13 bin aday "kısa kol" diye eleniyordu.)
-    def arm_chain(ed, end, k):
-        L, chain, cur, cend = 0.0, [ed["id"]], ed, end
-        pts = list(ed["pts"] if end == "a" else ed["pts"][::-1])
+    # Bağlantı döngüsü: ETS2'de kesişim ancak kavşak prefabıyla bağlanır. Prefab alamayan kesişimlerde en düşük
+    # öncelikli ara sokak kolu (servis > konut > adsız) kaldırılır; ana yollara dokunulmaz. Kalan her kesişim ya
+    # prefablı ya da düz geçiş olur → yol ağı bağlı (yeni profilde "No valid offers ... HQ city" çökmesi, 2026-11-22).
+    removed_total = 0
+    for _it in range(a.connect_iters + 1):
+        # kısa çıkmaz ara sokakları önce buda (kesişimi gereksiz yere "kısa kol" yapıyorlar)
         while True:
-            L += cur["len"]
-            far = cur["b"] if cend == "a" else cur["a"]
-            nxt = inc.get(far, [])
-            if len(nxt) != 2 or far == k or L >= 200:
-                return L, chain, pts
-            (e2, en2) = nxt[0] if nxt[0][0]["id"] != cur["id"] else nxt[1]
-            if e2["id"] == cur["id"] or e2["id"] in chain or cls(e2["type"]) != cls(cur["type"]) \
-                    or cls(e2["type"]) is None or e2["oneway"] != cur["oneway"]:
-                return L, chain, pts
-            chain.append(e2["id"])
-            pts += (e2["pts"] if en2 == "a" else e2["pts"][::-1])[1:]
-            cur, cend = e2, en2
-
-    def chain_dir(pts):
-        o, acc, tgt = pts[0], 0.0, pts[-1]
-        for p, q in zip(pts, pts[1:]):
-            acc += math.dist(p, q)
-            if acc >= 15:
-                tgt = q
+            deg = Counter()
+            for ed in edges:
+                deg[ed["a"]] += 1
+                deg[ed["b"]] += 1
+            drop = {ed["id"] for ed in edges if ed["prio"] >= 7 and ed["len"] < a.drop_deadend_len
+                    and (deg[ed["a"]] == 1) != (deg[ed["b"]] == 1)}
+            if not drop:
                 break
-        dx, dz = tgt[0] - o[0], tgt[1] - o[1]
-        L = math.hypot(dx, dz) or 1
-        return [round(dx / L, 4), round(dz / L, 4)]
+            edges = [ed for ed in edges if ed["id"] not in drop]
+            for i, ed in enumerate(edges):
+                ed["id"] = i
+            removed_total += len(drop)
+        # 3) düğüm dereceleri ve kavşak adayları
+        inc = defaultdict(list)
+        for ed in edges:
+            inc[ed["a"]].append((ed, "a"))
+            inc[ed["b"]].append((ed, "b"))
 
-    cand = []
-    for k, lst in inc.items():
-        if len(lst) not in (3, 4) or k in excluded:
-            continue
-        cl = [cls(ed["type"]) for ed, _ in lst]
-        if None in cl or (cl.count("r1"), cl.count("r2")) not in PATTERNS:
-            continue
-        if any(ed["a"] == ed["b"] for ed, _ in lst):
-            continue
-        chains = [arm_chain(ed, end, k) for ed, end in lst]
-        if min(c[0] for c in chains) < a.min_arm:
-            continue
-        ids = [x for c in chains for x in c[1]]
-        if len(ids) != len(set(ids)):  # iki kol aynı zincir (halka)
-            continue
-        dirs = [chain_dir(c[2]) for c in chains]
-        if any(dirs[i][0] * dirs[j][0] + dirs[i][1] * dirs[j][1] > 0.9 for i in range(len(dirs)) for j in range(i)):
-            continue  # iki kol neredeyse üst üste (prefab açısı tutmaz)
-        c = edges[lst[0][0]["id"]]["pts"][0] if lst[0][1] == "a" else lst[0][0]["pts"][-1]
-        cand.append((min(c_[0] for c_ in chains), k, c, lst, chains, dirs))
-    cand.sort(key=lambda x: -x[0])  # en uzun kollu (en rahat) kavşaklar önce
-    chosen, grid = [], defaultdict(list)
-    G = a.min_junction_gap
-    used_edges = Counter()
-    for _, k, c, lst, chains, dirs in cand:
-        key = (int(c[0] // G), int(c[1] // G))
-        if any(math.dist(c, q) < G for dx in (-1, 0, 1) for dz in (-1, 0, 1) for q in grid[(key[0] + dx, key[1] + dz)]):
-            continue
-        # aynı zincirin iki ucunda prefab: zincir 2*yarıçap + pay kadar uzun olmalı
-        rad = 23.25 if any(cls(ed["type"]) == "r2" for ed, _ in lst) else a.prefab_radius
-        if any(used_edges[ch[1][0]] or any(used_edges[x] for x in ch[1]) for ch in chains
-               if ch[0] < 2 * rad + 8):
-            continue
-        grid[key].append(c)
-        for ch in chains:
-            for x in ch[1]:
-                used_edges[x] += 1
-        chosen.append({"id": len(chosen), "node": k, "x": c[0], "z": c[1], "arms":
-                       [{"edge": ed["id"], "end": end, "cls": cls(ed["type"]), "dir": d}
-                        for (ed, end), d in zip(lst, dirs)]})
+        def arm_dir(ed, end):
+            pts = ed["pts"] if end == "a" else ed["pts"][::-1]
+            o = pts[0]
+            acc = 0.0
+            tgt = pts[-1]
+            for p, q in zip(pts, pts[1:]):  # ~15 m ilerideki nokta
+                acc += math.dist(p, q)
+                if acc >= 15:
+                    tgt = q
+                    break
+            dx, dz = tgt[0] - o[0], tgt[1] - o[1]
+            L = math.hypot(dx, dz) or 1
+            return [round(dx / L, 4), round(dz / L, 4)]
+
+        # Kol zinciri: kavşak düğümünden çıkan kenar, 2 dereceli ve aynı görünüm grubundaki (r1/r2) düğümlerden
+        # geçerek devam eder; bu düğümler 4c'de tek yola birleştirildiği için kolun gerçek uzunluğu zincirdir.
+        # (Önceden ilk OSM parçasının uzunluğu ölçülüyordu: ~13 bin aday "kısa kol" diye eleniyordu.)
+        def arm_chain(ed, end, k):
+            L, chain, cur, cend = 0.0, [ed["id"]], ed, end
+            pts = list(ed["pts"] if end == "a" else ed["pts"][::-1])
+            while True:
+                L += cur["len"]
+                far = cur["b"] if cend == "a" else cur["a"]
+                nxt = inc.get(far, [])
+                if len(nxt) != 2 or far == k or L >= 200:
+                    return L, chain, pts
+                (e2, en2) = nxt[0] if nxt[0][0]["id"] != cur["id"] else nxt[1]
+                if e2["id"] == cur["id"] or e2["id"] in chain or cls(e2["type"]) != cls(cur["type"]) \
+                        or cls(e2["type"]) is None or e2["oneway"] != cur["oneway"]:
+                    return L, chain, pts
+                chain.append(e2["id"])
+                pts += (e2["pts"] if en2 == "a" else e2["pts"][::-1])[1:]
+                cur, cend = e2, en2
+
+        def chain_dir(pts):
+            o, acc, tgt = pts[0], 0.0, pts[-1]
+            for p, q in zip(pts, pts[1:]):
+                acc += math.dist(p, q)
+                if acc >= 15:
+                    tgt = q
+                    break
+            dx, dz = tgt[0] - o[0], tgt[1] - o[1]
+            L = math.hypot(dx, dz) or 1
+            return [round(dx / L, 4), round(dz / L, 4)]
+
+        cand = []
+        JWHY = Counter()
+        blocked = set()
+        for k, lst in inc.items():
+            if len(lst) < 3:
+                continue
+            blocked.add(k)  # seçilirse aşağıda çıkarılır
+            if len(lst) > 4:
+                JWHY["5+ kol"] += 1
+                continue
+            if k in excluded:
+                JWHY["reddedilmiş"] += 1
+                continue
+            cl = [cls(ed["type"]) for ed, _ in lst]
+            if None in cl or (cl.count("r1"), cl.count("r2")) not in PATTERNS:
+                JWHY["desen " + "+".join(sorted(LOOK_GROUP.get(ed["type"], ed["type"]) for ed, _ in lst))] += 1
+                continue
+            if any(ed["a"] == ed["b"] for ed, _ in lst):
+                JWHY["halka"] += 1
+                continue
+            chains = [arm_chain(ed, end, k) for ed, end in lst]
+            if min(c[0] for c in chains) < a.min_arm:
+                JWHY["kısa kol"] += 1
+                continue
+            ids = [x for c in chains for x in c[1]]
+            if len(ids) != len(set(ids)):  # iki kol aynı zincir (halka)
+                JWHY["kol halkası"] += 1
+                continue
+            dirs = [chain_dir(c[2]) for c in chains]
+            if any(dirs[i][0] * dirs[j][0] + dirs[i][1] * dirs[j][1] > 0.9 for i in range(len(dirs)) for j in range(i)):
+                JWHY["dar açı"] += 1
+                continue  # iki kol neredeyse üst üste (prefab açısı tutmaz)
+            c = edges[lst[0][0]["id"]]["pts"][0] if lst[0][1] == "a" else lst[0][0]["pts"][-1]
+            cand.append((min(c_[0] for c_ in chains), k, c, lst, chains, dirs))
+        cand.sort(key=lambda x: -x[0])  # en uzun kollu (en rahat) kavşaklar önce
+        chosen, grid = [], defaultdict(list)
+        G = a.min_junction_gap
+        used_edges = Counter()
+        for _, k, c, lst, chains, dirs in cand:
+            key = (int(c[0] // G), int(c[1] // G))
+            if any(math.dist(c, q) < G for dx in (-1, 0, 1) for dz in (-1, 0, 1) for q in grid[(key[0] + dx, key[1] + dz)]):
+                JWHY["başka kavşağa yakın"] += 1
+                continue
+            # aynı zincirin iki ucunda prefab: zincir 2*yarıçap + pay kadar uzun olmalı
+            rad = 23.25 if any(cls(ed["type"]) == "r2" for ed, _ in lst) else a.prefab_radius
+            if any(used_edges[ch[1][0]] or any(used_edges[x] for x in ch[1]) for ch in chains
+                   if ch[0] < 2 * rad + 8):
+                continue
+            grid[key].append(c)
+            for ch in chains:
+                for x in ch[1]:
+                    used_edges[x] += 1
+            blocked.discard(k)
+            chosen.append({"id": len(chosen), "node": k, "x": c[0], "z": c[1], "arms":
+                           [{"edge": ed["id"], "end": end, "cls": cls(ed["type"]), "dir": d}
+                            for (ed, end), d in zip(lst, dirs)]})
+
+        if _it == a.connect_iters:
+            break
+        rm = set()
+        for k in blocked:
+            minor = [ed for ed, _ in inc[k] if ed["prio"] >= 7 and ed["id"] not in rm]
+            if minor:
+                rm.add(max(minor, key=lambda e: (e["prio"], -e["len"]))["id"])
+        print(f"  bağlantı turu {_it + 1}: kavşak {len(chosen)}, prefabsız kesişim {len(blocked)}, kaldırılan sokak {len(rm)}")
+        if not rm:
+            break
+        edges = [ed for ed in edges if ed["id"] not in rm]
+        for i, ed in enumerate(edges):
+            ed["id"] = i
+        removed_total += len(rm)
+    print(f"bağlantı için kaldırılan ara sokak parçası: {removed_total}")
+    print(f"kavşak: {len(chosen)} prefab; prefabsız kesişim nedenleri: {dict(JWHY.most_common(14))}")
 
     # 3b) Otoyol ayrılma/katılma noktaları (tek yönlü şerit + tek yönlü rampa, sağdan trafik)
     hwj, hgrid = [], defaultdict(list)
@@ -376,7 +431,7 @@ def main() -> None:
             continue
         # prefab (40 m) çıkışta gelen şeridin, katılmada giden şeridin üstüne oturur
         long_e, short_e = (ein, eout) if kind == "exit" else (eout, ein)
-        if long_e["len"] < a.hw_prefab_len + 10 or short_e["len"] < 12 or er["len"] < 30:
+        if long_e["len"] < a.hw_prefab_len + 4 or short_e["len"] < 8 or er["len"] < 20:
             why[f"kısa kenar ({'uzun' if long_e['len'] < a.hw_prefab_len + 10 else 'kısa/rampa'})"] += 1
             continue
         c = ein["pts"][-1]
@@ -474,19 +529,47 @@ def main() -> None:
 
     # 5) Şirket depoları: sanayi alanlarında, düz ve uzun bir şehir yolu parçasının yanına iki düğümlü depo
     #    prefabı. Parça ikiye bölünür; depo düğümleri iki yeni kenar ucuna gelir.
-    depots = place_depots(edges, chosen, S, a, links=road_links)
-    cities = assign_cities(depots, edges, S)
-    garages = place_garages(edges, chosen, depots, S, links=road_links)
-
-    out = {"meta": {"scale_divisor": S, "origin_osm_node": 26505108, "axes": "+X doğu, +Z güney, Y=0",
-                    "prefab_radius": a.prefab_radius, "attribution": "(c) OpenStreetMap contributors, ODbL 1.0"},
-           "edges": edges, "junctions": chosen, "hw_junctions": hwj, "depots": depots, "garages": garages, "cities": cities, "road_links": road_links,
-           "city_areas": city_grid(edges, S)}
+    # Şehir kavşağına bağlanan rampalar: prefab kolu 1+1 şerit, rampa 1 şerit tek yön → "[traffic] Unable to determine
+    # output road lane". Otoyol prefabına bağlı olmayan rampa iki yönlü şehir yoluna çevrilir; bağlıysa kavşak atılır.
+    hw_edges = {arm["edge"] for h in hwj for arm in h["arms"]}
+    E_ = {e["id"]: e for e in edges}
+    keep_j, conv, dropj = [], 0, 0
+    for j in chosen:
+        ramps = [arm["edge"] for arm in j["arms"] if E_[arm["edge"]]["type"] == "ramp_1lane"]
+        if any(r in hw_edges for r in ramps):
+            dropj += 1
+            continue
+        for r in ramps:
+            e = E_[r]
+            e.update(type="r1_city", oneway=False, reverse=False)
+            conv += 1
+        keep_j.append(j)
+    for i, j in enumerate(keep_j):
+        j["id"] = i
+    chosen = keep_j
+    print(f"şehir kavşağındaki rampa: {conv} iki yönlü yola çevrildi, {dropj} kavşak atıldı (otoyol rampası)")
+    meta = {"scale_divisor": S, "origin_osm_node": 26505108, "axes": "+X doğu, +Z güney, Y=0",
+            "prefab_radius": a.prefab_radius, "attribution": "(c) OpenStreetMap contributors, ODbL 1.0"}
     dst = ROOT / "data" / "processed" / f"map_graph_s{S:g}.json"
-    dst.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
-    # otoyol prefab ↔ yol şerit sayısı eşleme (hi/lo prefab + hw2/3/4_oneway)
+    # 1) otoyol prefab ↔ yol şerit sayısı eşleme (hi/lo prefab + hw2/3/4_oneway); çelişkili otoyol kavşaklarını atar
+    dst.write_text(json.dumps({"meta": meta, "edges": edges, "junctions": chosen, "hw_junctions": hwj,
+                               "road_links": road_links}, ensure_ascii=False), encoding="utf-8")
     import assign_hw_lanes
     assign_hw_lanes.main(str(dst))
+    gl = json.loads(dst.read_text(encoding="utf-8"))
+    edges, hwj = gl["edges"], gl["hw_junctions"]
+    # 2) Oyunun yol ağı: yalnız prefab düğümleri, birleşik yollar ve uç bağlantıları bağlıdır. Depo ve garajlar
+    #    SON ağın en büyük bağlı bileşenine konur → her HQ şehrinden diğer şehirlerin depolarına rota (ilk iş) bulunur.
+    #    (Aksi halde yeni profilde "No valid offers found for player's HQ city" → oyun kapanıyordu, 2026-11-22.)
+    main_edges = main_component(edges, chosen + hwj, road_links)
+    print(f"ana bağlı ağ: {len(main_edges)}/{len(edges)} kenar, "
+          f"%{100 * sum(e['len'] for e in edges if e['id'] in main_edges) / sum(e['len'] for e in edges):.1f} uzunluk")
+    depots = place_depots(edges, chosen, S, a, links=road_links, allowed=main_edges)
+    cities = assign_cities(depots, edges, S)
+    garages = place_garages(edges, chosen, depots, S, links=road_links, allowed=main_edges)
+    out = {"meta": meta, "edges": edges, "junctions": chosen, "hw_junctions": hwj, "depots": depots, "garages": garages,
+           "cities": cities, "road_links": road_links, "city_areas": city_grid(edges, S)}
+    dst.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
     deg =Counter(len(v) for v in inc.values())
     summary = {"scale": S, "edges": len(edges), "segments": sum(len(e["pts"]) - 1 for e in edges),
                "graph_nodes": len(inc), "degree_hist": dict(sorted(deg.items())),
@@ -789,7 +872,7 @@ COMPANY_POOLS = {"generic": ["stokes", "transinet"],
                  "light_factory": ["trameri", "kathode"]}
 
 
-def place_depots(edges, chosen, S, a, per_city=3, min_gap=250.0, links=()):
+def place_depots(edges, chosen, S, a, per_city=3, min_gap=250.0, links=(), allowed=None):
     """Her şehre en çok bir tane her depo türünden yerleştirir; edges listesini yerinde böler.
     Önce sanayi poligonları içindeki uzun düz parçalar; en az iki depo alamayan şehirlerde sonra sanayi
     dışı (ör. Darıca'da sanayi alanı neredeyse yok) iki yönlü şehir yolları, giderek daralan boşlukla."""
@@ -832,6 +915,8 @@ def place_depots(edges, chosen, S, a, per_city=3, min_gap=250.0, links=()):
         k = len(out)
         for ed in sorted(edges, key=lambda e: -e["len"]):
             if ed["type"] not in ("r1_city", "r1_city_narrow") or ed["oneway"]:
+                continue
+            if allowed is not None and ed["id"] not in allowed:
                 continue
             pts = ed["pts"]
             for i in range(len(pts) - 1):
@@ -916,7 +1001,33 @@ def place_depots(edges, chosen, S, a, per_city=3, min_gap=250.0, links=()):
     return out
 
 
-def place_garages(edges, chosen, depots, S, links=(), along=26.7, need=78.0, clear=42.0):
+def main_component(edges, junctions, links):
+    """Oyunda bağlı olan en büyük yol ağının kenar kimlikleri (prefab kolları + uç bağlantıları ile birleşim)."""
+    par = {}
+
+    def f(x):
+        par.setdefault(x, x)
+        while par[x] != x:
+            par[x] = par[par[x]]
+            x = par[x]
+        return x
+
+    for j in junctions:
+        k = ("j", j["id"], j.get("kind", "c"))
+        for arm in j["arms"]:
+            par[f(("e", arm["edge"]))] = f(k)
+    for l in links:
+        ra, rb = f(("e", l[0])), f(("e", l[2]))
+        if ra != rb:
+            par[ra] = rb
+    size = Counter()
+    for e in edges:
+        size[f(("e", e["id"]))] += e["len"]
+    best = size.most_common(1)[0][0]
+    return {e["id"] for e in edges if f(("e", e["id"])) == best}
+
+
+def place_garages(edges, chosen, depots, S, links=(), along=26.7, need=78.0, clear=42.0, allowed=None):
     """Her şehre bir oyuncu garajı (garage_medium_01): yeni profilde merkez (HQ) şehri seçimi ve tırın başlangıç
     yeri garajlardan gelir; garajsız haritada şehir listesi boş kalır ve tır harita dışında (boşlukta) başlar.
     Prefabın iki düğümü yol boyunca 26,7 m aralıklı (yanal 22,7 m kayma C# tarafında); gövde yolun iki yanına
@@ -932,6 +1043,8 @@ def place_garages(edges, chosen, depots, S, links=(), along=26.7, need=78.0, cle
     out, done = [], set()
     for ed in sorted(edges, key=lambda e: -e["len"]):
         if ed["type"] not in ("r1_city", "r1_city_narrow") or ed["oneway"]:
+            continue
+        if allowed is not None and ed["id"] not in allowed:
             continue
         pts = ed["pts"]
         for i in range(len(pts) - 1):

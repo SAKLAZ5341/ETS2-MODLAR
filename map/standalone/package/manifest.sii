@@ -6,6 +6,7 @@ mod_package : .package_name
 	display_name: "SAKLAZ Türkiye Map - Kocaeli"
 	author: "SAKLAZ"
 	category[]: "map"
+	icon: "icon.jpg"
 	description_file: "description.txt"
 	compatible_versions[]: "1.62.*"
 }

@@ -347,3 +347,15 @@ Paket `releases/saklaz_turkiye_map_0.2.0-dev_20261122_1414.scs`.
 - Çözüm: `place_garages` her ilçeye bir oyuncu garajı (`43001` garage_medium_01), yol ikiye bölünüp düğümlere bağlanır;
   C# `Garage` öğeleri (garaj noktası + satın alma noktası, şehir adıyla). 12/12 ilçe. Önizleme logu temiz.
 - Mod adı "SAKLAZ Türkiye Map - Kocaeli"; açıklamaya profil oluşturma talimatı eklendi.
+
+## 25. Yeni profil çökmesi – 2026-11-22 22:55
+- Kullanıcı logu: `No valid offers found for player's HQ city 'izmit'` → `Error generating first job!` → oyun kapanıyor.
+- Neden: oyunun yol ağı parçalı (prefabsız kesişimler bağlanmaz). `tools/validation/connectivity.py`: 3.631 bileşen,
+  depoların 24/27'si ve garajların 9/12'si ana ağdan kopuktu.
+- Düzeltme: otoyol şerit eşlemesi depo/garajdan ÖNCE çalışır; depo ve garajlar son ağın en büyük bağlı bileşenine
+  konur (`main_component`). Seçilebilir HQ: Gebze, Körfez, Derince, İzmit, Kandıra (12 depo aynı ağda).
+- Bağlantı turu: prefab alamayan kesişimlerde en düşük öncelikli ara sokak kaldırılır (`--connect-iters`); otoyol
+  çıkış kuralları gevşetildi (min aralık 50 m). Şehir kavşağına bağlanan rampalar iki yönlü yola çevrilir
+  (şerit hatası olmasın). Önizleme: harita/trafik/şirket hatası yok (4 prefab tabelası uyarısı).
+- Mod simgesi: `tools/packaging/make_icon.py` → `map/standalone/package/icon.jpg` (276×162).
+- Kalan iş: ana ağ yolların ~%12'si; diğer 7 ilçe ana ağa bağlanana dek HQ seçilemez (otoyol çıkışları, sık kesişimler).
