@@ -18,6 +18,26 @@ POP = {"gebze": 400000, "darica": 220000, "cayirova": 150000, "dilovasi": 50000,
        "derince": 150000, "golcuk": 175000, "karamursel": 60000, "kandira": 55000, "kartepe": 135000, "basiskele": 120000}
 PREFAB = {"generic": "at_0j004", "logistic": "at_0j009", "light_factory": "at_0j008"}
 
+LETTERS = list("ABCDEFGHIJKLMNOPRSTUVYZ")  # Türk plakalarında Q, W, X yok
+
+
+def city_sui(t, name):
+    """Ana oyun şehirleriyle (ör. /def/city/wien.sui) aynı alanlar. Dünya haritası dizileri (8 yakınlaştırma
+    düzeyi) ve plaka tanımları boş kalınca oyun 'Index outside array boundaries: 6 >= 0' ile çöküyordu (2026-11-22).
+    Plaka: Kocaeli 41 – "41 AB 123"."""
+    L = [f"city_data : city.{t}", "{", f'\tcity_name: "{name}"', "\tcountry: turkey", f"\tpopulation: {POP.get(t, 100000)}", ""]
+    L += ["\tcity_pin_scale_factor[]: 1.0"] * 8 + [""]
+    L += ["\tmap_x_offsets[]: 0"] * 8 + [""]
+    L += ["\tmap_y_offsets[]: 0"] * 8 + [""]
+    L += ['\tvehicle_brands[]: "man"', ""]
+    for pre in ("truck", "ai"):
+        L += [f'\t{pre}_lp_template[]: "0 11 222"' if pre == "truck" else "", f'\t{pre}_lp_def0[]: "41"']
+        L += [f'\t{pre}_lp_def1[]: "{ch}"' for ch in LETTERS]
+        L += [f'\t{pre}_lp_def2[]: "{d}"' for d in "0123456789"] + [""]
+    L += ["}", ""]
+    return "\n".join(x for x in L if x is not None)
+
+
 if M.exists():
     shutil.rmtree(M)
 (M / "city").mkdir(parents=True)
@@ -25,9 +45,7 @@ inc = []
 for c in G["cities"]:
     t = c["token"]
     inc.append(f'@include "city/{t}.sui"')
-    (M / "city" / f"{t}.sui").write_text(
-        f'city_data : city.{t}\n{{\n\tcity_name: "{c["name"]}"\n\tcountry: turkey\n\tpopulation: {POP.get(t, 100000)}\n}}\n',
-        encoding="utf-8")
+    (M / "city" / f"{t}.sui").write_text(city_sui(t, c["name"]), encoding="utf-8")
 (M / "city.saklaz.sii").write_text("SiiNunit\n{\n" + "\n".join(inc) + "\n}\n", encoding="utf-8")
 
 from collections import Counter

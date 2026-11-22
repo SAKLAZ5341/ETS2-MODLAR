@@ -359,3 +359,11 @@ Paket `releases/saklaz_turkiye_map_0.2.0-dev_20261122_1414.scs`.
   (şerit hatası olmasın). Önizleme: harita/trafik/şirket hatası yok (4 prefab tabelası uyarısı).
 - Mod simgesi: `tools/packaging/make_icon.py` → `map/standalone/package/icon.jpg` (276×162).
 - Kalan iş: ana ağ yolların ~%12'si; diğer 7 ilçe ana ağa bağlanana dek HQ seçilemez (otoyol çıkışları, sık kesişimler).
+
+## 26. Oyun içi çökme – 2026-11-22 23:00
+- Kullanıcı logu: ilk iş üretildi (stokes.kandira → posped.kandira), tır Kandıra'da başladı; ~40 sn sonra
+  `Index outside array boundaries: 6 >= 0` (array_t<float>) ile çöktü (menü/dünya haritası açılınca).
+- Neden: şehir tanımlarında (city_data) dünya haritası dizileri ve plaka tanımları yoktu.
+- Düzeltme: `write_mod_defs.py city_sui` ana oyun (wien.sui) / Grand Utopia biçiminde: city_pin_scale_factor[8],
+  map_x_offsets[8], map_y_offsets[8], vehicle_brands, truck/ai plaka tanımları ("41 AB 123").
+- Logda kalan: "Failed to find camera point for game intro! (kandira)" (yalnız tanıtım kamerası; çökme değil).
