@@ -142,9 +142,18 @@ def main() -> None:
         L = math.hypot(dx, dz) or 1
         return [round(dx / L, 4), round(dz / L, 4)]
 
+    # C# üreticinin prefab açısı tutmadığı için reddettiği kavşak düğümleri (junction_rejects.json) birikimli
+    # olarak dışlanır; bu düğümler 4c'de düz geçiş olarak bağlanır.
+    excl_path = ROOT / "data" / "processed" / "junction_excluded.json"
+    rej_path = ROOT / "data" / "processed" / "junction_rejects.json"
+    excluded = set(json.loads(excl_path.read_text())) if excl_path.exists() else set()
+    if rej_path.exists():
+        excluded |= set(json.loads(rej_path.read_text()))
+        excl_path.write_text(json.dumps(sorted(excluded)))
+        rej_path.unlink()
     cand = []
     for k, lst in inc.items():
-        if len(lst) not in (3, 4):
+        if len(lst) not in (3, 4) or k in excluded:
             continue
         cl = [cls(ed["type"]) for ed, _ in lst]
         if None in cl or (cl.count("r1"), cl.count("r2")) not in PATTERNS:
@@ -285,14 +294,20 @@ def main() -> None:
         print(f"kısa çıkmaz sokak atıldı: {len(edges) - len(keep)}")
         edges = keep
 
+    # 4c) Prefabsız düğümlerde yol sürekliliği: ETS2'de aynı noktada biten iki yol öğesi BAĞLI DEĞİLDİR
+    #     (GPS, yapay zekâ trafiği ve iş rotaları kopar). Her prefabsız düğümde en düz/uyumlu kol çiftleri
+    #     tek kenarda birleştirilir; 3-4 kollu kesişimde ana yol kesintisiz geçer, kalan kol orada biter.
+    jnodes = {j["node"] for j in chosen} | {h["node"] for h in hwj}
+    edges, road_links = link_through(edges, chosen + hwj, jnodes, arm_dir)
+
     # 5) Şirket depoları: sanayi alanlarında, düz ve uzun bir şehir yolu parçasının yanına iki düğümlü depo
     #    prefabı. Parça ikiye bölünür; depo düğümleri iki yeni kenar ucuna gelir.
-    depots = place_depots(edges, chosen, S, a)
+    depots = place_depots(edges, chosen, S, a, links=road_links)
     cities = assign_cities(depots, edges, S)
 
     out = {"meta": {"scale_divisor": S, "origin_osm_node": 26505108, "axes": "+X doğu, +Z güney, Y=0",
                     "prefab_radius": a.prefab_radius, "attribution": "(c) OpenStreetMap contributors, ODbL 1.0"},
-           "edges": edges, "junctions": chosen, "hw_junctions": hwj, "depots": depots, "cities": cities,
+           "edges": edges, "junctions": chosen, "hw_junctions": hwj, "depots": depots, "cities": cities, "road_links": road_links,
            "city_areas": city_grid(edges, S)}
     dst = ROOT / "data" / "processed" / f"map_graph_s{S:g}.json"
     dst.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
@@ -312,6 +327,115 @@ def main() -> None:
 
 
 CITY_TOKENS = {"Gebze": "gebze", "Darıca": "darica", "Çayırova": "cayirova", "Dilovası": "dilovasi"}
+
+LOOK_GROUP = {"r1_city": "r1", "r1_city_narrow": "r1", "service": "r1", "r2_divided": "r2",
+              "ramp_1lane": "ramp", "hw3_oneway": "hw3", "hw3_divided": "hw3d"}
+ONEWAY_LOOK = {"ramp", "hw3"}
+
+
+def link_through(edges, junctions, jnodes, arm_dir):
+    """Prefabsız düğümlerde kol çiftlerini (düz geçiş) zincirleyip kenarları birleştirir; kavşak kollarını yeniden eşler."""
+    inc = defaultdict(list)
+    for ed in edges:
+        inc[ed["a"]].append((ed["id"], "a"))
+        inc[ed["b"]].append((ed["id"], "b"))
+    E = {ed["id"]: ed for ed in edges}
+    partner = {}
+    stats = Counter()
+    xlinks = []  # farklı görünümlü çift yönlü yollar (r1↔r2): birleştirilmez, C# düğümleri birleştirir
+
+    def ok_pair(x, y, cross=False):
+        ex, ey = E[x[0]], E[y[0]]
+        if x[0] == y[0]:
+            return False
+        gx, gy = LOOK_GROUP.get(ex["type"]), LOOK_GROUP.get(ey["type"])
+        if cross:
+            return gx != gy and {gx, gy} <= {"r1", "r2"}
+        if gx is None or gx != gy:
+            return False
+        if gx in ONEWAY_LOOK:  # tek yönlü: biri gelen (b), öbürü giden (a); ters (oneway=-1) karışmasın
+            if {x[1], y[1]} != {"a", "b"} or ex["reverse"] or ey["reverse"]:
+                return False
+        return True
+
+    for n, ends in inc.items():
+        if n in jnodes or len(ends) < 2:
+            continue
+        dirs = {e: arm_dir(E[e[0]], e[1]) for e in ends}
+        pairs = []
+        for i in range(len(ends)):
+            for j in range(i + 1, len(ends)):
+                x, y = ends[i], ends[j]
+                cross = ok_pair(x, y, cross=True)
+                if not (cross or ok_pair(x, y)):
+                    continue
+                dot = dirs[x][0] * dirs[y][0] + dirs[x][1] * dirs[y][1]  # -1 = tam düz geçiş
+                pr = min(E[x[0]]["prio"], E[y[0]]["prio"])
+                pairs.append((dot + 0.15 * pr + (0.2 if cross else 0), dot, x, y, cross))
+        pairs.sort(key=lambda t: t[0])
+        used = set()
+        for _, dot, x, y, cross in pairs:
+            if x in used or y in used:
+                continue
+            if len(ends) > 2 and dot > -0.5:  # kesişimde yalnızca belirgin düz geçişler (≥120°)
+                continue
+            used |= {x, y}
+            if cross:
+                xlinks.append((x, y))
+                stats["r1-r2"] += 1
+                continue
+            partner[x], partner[y] = y, x
+            stats[len(ends)] += 1
+
+    # zincirler: serbest ucu olan kenardan başlayıp ortaklara yürü
+    seen, out, endmap = set(), [], {}
+
+    def walk(start_id, start_end):
+        """start_end ucundan başlayarak zinciri döndürür: [(edge_id, ters_mi)], kenarların yürüme yönünde"""
+        chain, eid, entry = [], start_id, start_end
+        while True:
+            seen.add(eid)
+            rev = entry == "b"  # kenara b ucundan girildiyse ters yürünür
+            chain.append((eid, rev))
+            exit_end = "a" if rev else "b"
+            nxt = partner.get((eid, exit_end))
+            if nxt is None or nxt[0] in seen:
+                return chain
+            eid, entry = nxt
+
+    starts = [(ed["id"], "a") for ed in edges if (ed["id"], "a") not in partner] +              [(ed["id"], "b") for ed in edges if (ed["id"], "b") not in partner]
+    for eid, end in starts + [(ed["id"], "a") for ed in edges]:  # sonuncular: kapalı halkalar
+        if eid in seen:
+            continue
+        chain = walk(eid, end)
+        first = E[chain[0][0]]
+        # tek yönlü görünümde zincir yürüme yönü trafik yönü olmalı: ters yürüdüyse tüm zinciri çevir
+        if LOOK_GROUP.get(first["type"]) in ONEWAY_LOOK and chain[0][1]:
+            chain = [(e, not r) for e, r in reversed(chain)]
+        pts, L = [], 0.0
+        for e, r in chain:
+            ps = E[e]["pts"][::-1] if r else E[e]["pts"]
+            pts.extend(ps if not pts else ps[1:])
+            L += E[e]["len"]
+        head = max((E[e] for e, _ in chain), key=lambda x: x["len"])
+        e0, r0 = chain[0]
+        e1, r1 = chain[-1]
+        na = E[e0]["b"] if r0 else E[e0]["a"]
+        nb = E[e1]["a"] if r1 else E[e1]["b"]
+        new = dict(head, id=len(out), pts=[list(p) for p in pts], len=round(L, 1), a=na, b=nb,
+                   prio=min(E[e]["prio"] for e, _ in chain),
+                   type=min((E[e]["type"] for e, _ in chain), key=lambda t: {"r1_city": 0}.get(t, 1)),
+                   reverse=head["reverse"] if len(chain) == 1 else False)
+        out.append(new)
+        endmap[(e0, "b" if r0 else "a")] = (new["id"], "a")
+        endmap[(e1, "a" if r1 else "b")] = (new["id"], "b")
+    for j in junctions:
+        for arm in j["arms"]:
+            arm["edge"], arm["end"] = endmap[(arm["edge"], arm["end"])]
+    links = [[*endmap[x], *endmap[y]] for x, y in xlinks]
+    print(f"düz geçiş birleştirme: {sum(stats.values())} bağlantı (kol sayısına göre {dict(stats)}); "
+          f"kenar {len(edges)} -> {len(out)}")
+    return out, links
 
 
 def load_city_polys(S):
@@ -434,7 +558,7 @@ DEPOT_TYPES = [
 ]
 
 
-def place_depots(edges, chosen, S, a, max_depots=9, min_gap=300.0, clear=45.0):
+def place_depots(edges, chosen, S, a, max_depots=9, min_gap=300.0, clear=45.0, links=()):
     """Sanayi poligonu içindeki uzun düz parçalara depo yerleştirir; edges listesini yerinde böler."""
     from shapely.geometry import Point, Polygon
     from shapely.strtree import STRtree
@@ -513,6 +637,10 @@ def place_depots(edges, chosen, S, a, max_depots=9, min_gap=300.0, clear=45.0):
                 for arm in j["arms"]:
                     if arm["edge"] == ed["id"] and arm["end"] == "b":
                         arm["edge"] = B["id"]
+            for lk in links:  # [e1, uç1, e2, uç2]
+                for q in (0, 2):
+                    if lk[q] == ed["id"] and lk[q + 1] == "b":
+                        lk[q] = B["id"]
             edges.append(B)
             used.append(mid)
             out.append({"id": len(out), "company": typ["company"], "kind": typ["kind"],

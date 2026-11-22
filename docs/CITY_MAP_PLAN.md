@@ -234,3 +234,22 @@ Düzeltmeler:
    - Kalan `Economy reset - company mismatch` satırı hatasız tek başına her önizlemede çıkıyor (önizleme ilk kaydı `def/initial_save/preview` yok); gerçek profilde doğrulanacak.
 6. Sürüş: önizlemede klavyeyle sürüş çalışıyor. Oyun menüsü sentetik fare tıklamalarını almıyor (klavye Enter çalışıyor) → yeni profil + harita seçimi testi elle yapılmalı.
 7. Paket `releases/saklaz_turkiye_map_0.2.0-dev_20261122_0259.scs` (70 dosya); oyun `[zipfs] ... Created, 70 entries` ile manifest uyarısı olmadan yükledi. Kopyası kullanıcının `Belgeler\Euro Truck Simulator 2\mod\saklaz_turkiye_map_0.2.0-dev.scs`.
+
+## 19. Yol ağı sürekliliği – 2026-11-22 03:10
+
+ETS2'de aynı noktada biten iki yol öğesi **bağlı değildir** (GPS, yapay zekâ trafiği, iş rotaları kopar).
+Analiz: 2.062 düğümde iki serbest uç (çıkmaz sokak budamasından sonra yeniden birleştirilmemiş),
+~1.400 kesişimde prefab yoktu.
+
+- `build_city_graph.py` 4c `link_through`: prefabsız her düğümde en düz/uyumlu kol çiftleri tek kenara birleştirilir
+  (tek yönlü görünümlerde gelen→giden yön korunur; kesişimde ≥120° düz geçiş). 3.605 bağlantı; kenar 7.675 → 4.149.
+- Farklı görünümlü çift yönlü geçişler (r1↔r2) `road_links` olarak yazılır; C# yön ön planı (origin'e dokunmayan
+  yol ters kurulabilir) + `INode.Merge` ile bağlar: 63/72.
+- C# reddettiği kavşak düğümlerini `junction_rejects.json`'a yazar; graf üreticisi bunları birikimli olarak
+  (`junction_excluded.json`) dışlayıp düz geçiş yapar. 3 turda yakınsadı: **487 kavşak, reddedilen 0**.
+- Kalan serbest uçlar: ~190 iki uçlu (çoğu rampa↔şehir yolu, tek yön/şerit uyuşmazlığı) ve ~76 kesişim.
+- Sonuç: yol 4.126, segment 13.730, bağlantı 1.689, prefab hata 0; editör recompute/save hatasız; önizlemede harita, trafik ve şirket hatası yok.
+- Paket: `releases/saklaz_turkiye_map_0.2.0-dev_20261122_0310.scs` → `Belgeler\Euro Truck Simulator 2\mod\saklaz_turkiye_map_0.2.0-dev.scs`.
+
+Sonraki işler: OSM'de çift şeritli (iki tek yönlü yol) şehir caddeleri hâlâ iki ayrı çift yönlü yol olarak çiziliyor (tek eksene indirilmeli);
+Gebze/Darıca'ya depo; rampa↔şehir yolu bağlantıları; tüm Kocaeli.

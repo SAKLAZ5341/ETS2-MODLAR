@@ -424,6 +424,7 @@ internal static class Program
         var attach = new Dictionary<(int edge, string end), (Prefab p, Vector3 nodePos, Vector3 center, float radius)>();
         int placed = 0, rejected = 0;
         var byToken = new Dictionary<string, int>();
+        var rejectedNodes = new List<int>();
         foreach (var jn in graph.GetProperty("junctions").EnumerateArray())
         {
             var arms = jn.GetProperty("arms").EnumerateArray().ToList();
@@ -455,7 +456,7 @@ internal static class Program
                     }
                 }
             }
-            if (bestPerm == null || bestMax > maxErr) { rejected++; continue; }
+            if (bestPerm == null || bestMax > maxErr) { rejected++; rejectedNodes.Add(jn.GetProperty("node").GetInt32()); continue; }
             var nodePos = spec.ppd.Nodes.Select(nd => nd.Position).ToList();
             float radius = nodePos.Max(p => new Vector2(p.X, p.Z).Length()) + 3f;
             try
@@ -474,7 +475,7 @@ internal static class Program
                 byToken[spec.token] = byToken.GetValueOrDefault(spec.token) + 1;
                 placed++;
             }
-            catch (Exception ex) { rejected++; if (rejected < 10) Console.WriteLine($"kavşak {jn.GetProperty("id")}: {ex.Message}"); }
+            catch (Exception ex) { rejected++; rejectedNodes.Add(jn.GetProperty("node").GetInt32()); if (rejected < 10) Console.WriteLine($"kavşak {jn.GetProperty("id")}: {ex.Message}"); }
         }
 
         // 1b) şirket depoları (iki düğümlü prefab, yol ikiye bölünmüş) + Company öğeleri
@@ -674,6 +675,41 @@ internal static class Program
         // 2) yollar
         float R = (float)graph.GetProperty("meta").GetProperty("prefab_radius").GetDouble() + 3f;
         var shortSkip = new Dictionary<string, int>();
+        var roadEnds = new Dictionary<(int, string), INode>();
+        // 2a) r1↔r2 bağlantıları için yön ön planı: bağlantı noktasında yollardan biri bitmeli, öbürü başlamalı.
+        //     Origin düğümüne dokunmayan çift yönlü yol serbestçe ters kurulabilir.
+        var extraFlip = new HashSet<int>();
+        int linkPlanFail = 0;
+        {
+            var edgeById = graph.GetProperty("edges").EnumerateArray().ToDictionary(x => x.GetProperty("id").GetInt32());
+            bool OneWayKind(string k) => k.EndsWith("_oneway") || k == "ramp_1lane";
+            bool OriginEnd(int id, string end) => attach.TryGetValue((id, end), out var x) && x.p != null &&
+                x.p.Nodes.FindIndex(n => Vector3.DistanceSquared(n.Position, x.nodePos) < 0.01f) == 0;
+            bool Has(int id, string end) => attach.TryGetValue((id, end), out var x) && x.p != null;
+            bool NaturalFlip(int id)
+            {
+                var ed = edgeById[id]; bool ow = OneWayKind(ed.GetProperty("type").GetString());
+                bool hA = Has(id, "a"), hB = Has(id, "b");
+                bool f = !hA && !hB && ed.GetProperty("reverse").GetBoolean();
+                if (hA && OriginEnd(id, "a") && !ow && !(hB && OriginEnd(id, "b"))) f = !f;
+                return f;
+            }
+            bool Free(int id) => !OneWayKind(edgeById[id].GetProperty("type").GetString()) && !OriginEnd(id, "a") && !OriginEnd(id, "b");
+            var fixedE = new HashSet<int>();
+            if (graph.TryGetProperty("road_links", out var rl0))
+                foreach (var lk in rl0.EnumerateArray())
+                {
+                    int e1 = lk[0].GetInt32(), e2 = lk[2].GetInt32();
+                    if (!edgeById.ContainsKey(e1) || !edgeById.ContainsKey(e2)) continue;
+                    bool S1 = (lk[1].GetString() == "a") ^ (NaturalFlip(e1) ^ extraFlip.Contains(e1));
+                    bool S2 = (lk[3].GetString() == "a") ^ (NaturalFlip(e2) ^ extraFlip.Contains(e2));
+                    if (S1 != S2) { fixedE.Add(e1); fixedE.Add(e2); continue; }
+                    if (Free(e2) && !fixedE.Contains(e2)) { if (!extraFlip.Add(e2)) extraFlip.Remove(e2); }
+                    else if (Free(e1) && !fixedE.Contains(e1)) { if (!extraFlip.Add(e1)) extraFlip.Remove(e1); }
+                    else { linkPlanFail++; continue; }
+                    fixedE.Add(e1); fixedE.Add(e2);
+                }
+        }
         int roads = 0, segs = 0, skipped = 0, connected = 0, failed = 0, reversedAtOrigin = 0, originUnattached = 0;
         foreach (var e in graph.GetProperty("edges").EnumerateArray().OrderBy(e => e.GetProperty("prio").GetInt32()))
         {
@@ -687,7 +723,8 @@ internal static class Program
             bool hasA = sa.p != null, hasB = sb.p != null;
             if (hasA && hasB && ReferenceEquals(sa.p, sb.p)) { hasB = false; }
             // ters yönlü tek yönlüler yalnızca kavşaksız kenarlarda çevrilir
-            if (!hasA && !hasB && e.GetProperty("reverse").GetBoolean()) pts.Reverse();
+            bool flipped = false;
+            if (!hasA && !hasB && e.GetProperty("reverse").GetBoolean()) { pts.Reverse(); flipped = true; }
             var mid = pts.Where(p => (!hasA || Vector3.Distance(p, sa.center) > sa.radius) && (!hasB || Vector3.Distance(p, sb.center) > sb.radius)).ToList();
             var seq = new List<Vector3>();
             if (hasA) seq.Add(sa.nodePos);
@@ -717,6 +754,14 @@ internal static class Program
                 (sa, sb) = (sb, sa);
                 (hasA, hasB) = (hasB, hasA);
                 reversedAtOrigin++;
+                flipped = !flipped;
+            }
+            if (extraFlip.Contains(id))
+            {
+                seq.Reverse();
+                (sa, sb) = (sb, sa);
+                (hasA, hasB) = (hasB, hasA);
+                flipped = !flipped;
             }
             string stage = "start";
             try
@@ -742,6 +787,8 @@ internal static class Program
                     try { sa.p.Attach(firstRoad); connected++; }
                     catch (Exception ex2) { originUnattached++; if (originUnattached < 10) Console.WriteLine($"kenar {id} ({kind}) origin ucu bağlanamadı: {ex2.Message}"); }
                 }
+                roadEnds[(id, flipped ? "b" : "a")] = firstRoad.Node;
+                roadEnds[(id, flipped ? "a" : "b")] = road.ForwardNode;
                 roads++;
             }
             catch (Exception ex)
@@ -750,6 +797,26 @@ internal static class Program
                 if (failed < 40) Console.WriteLine($"kenar {id} ({kind}) atlandı [{stage}, seq={seq.Count}]: {ex.Message}");
             }
         }
+
+        // 2b) farklı görünümlü yolların (r1↔r2) düz geçişleri: uç düğümlerini birleştir
+        int linked = 0, linkFail = 0;
+        if (graph.TryGetProperty("road_links", out var rl))
+            foreach (var lk in rl.EnumerateArray())
+            {
+                var k1 = (lk[0].GetInt32(), lk[1].GetString());
+                var k2 = (lk[2].GetInt32(), lk[3].GetString());
+                if (!roadEnds.TryGetValue(k1, out var n1) || !roadEnds.TryGetValue(k2, out var n2)) { linkFail++; continue; }
+                try { n1.Merge(n2); linked++; }
+                catch
+                {
+                    try { n2.Merge(n1); linked++; }
+                    catch (Exception ex) { linkFail++; if (linkFail < 6) Console.WriteLine($"yol bağlantısı {k1}-{k2}: {ex.Message}"); }
+                }
+            }
+        Console.WriteLine($"r1↔r2 yol bağlantısı: {linked} (başarısız {linkFail}, yön planı çözülemeyen {linkPlanFail}, ters kurulan {extraFlip.Count})");
+        File.WriteAllText(Path.Combine(Root, "data", "processed", "junction_rejects.json"),
+            JsonSerializer.Serialize(rejectedNodes.Distinct().OrderBy(x => x)));
+        Console.WriteLine($"reddedilen kavşak düğümleri yazıldı: {rejectedNodes.Count} (data/processed/junction_rejects.json)");
 
         // 3) binalar (map_export'tan, place=true olanlar)
         int buildings = AddBuildings(map, cfg, Path.Combine(Root, exportRel), new Vector3(off.X, 0, off.Y), noBuild);
