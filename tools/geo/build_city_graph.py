@@ -76,6 +76,7 @@ def main() -> None:
     ap.add_argument("--no-collapse", action="store_true", help="bölünmüş caddeleri tek hatta indirgeme")
     ap.add_argument("--core-only", action="store_true", help="yalnız Gebze/Darıca/Çayırova/Dilovası çekirdeği")
     ap.add_argument("--tertiary-radius", type=float, default=3000.0, help="il geneli tertiary: merkeze en çok (gerçek m)")
+    ap.add_argument("--no-villages", dest="villages", action="store_false", help="merkezden uzak köy yollarını alma")
     ap.add_argument("--street-radius", type=float, default=800.0, help="il geneli sokaklar: merkeze en çok (gerçek m)")
     a = ap.parse_args()
     S = a.scale
@@ -89,7 +90,7 @@ def main() -> None:
     region_prov = core if prov is None else unary_union([prov, core])
     ways, seen_ids = [], set()
 
-    def add_way(wy, reg):
+    def add_way(wy, reg, rural=False):
         t = wy.get("tags", {})
         hw = t.get("highway")
         if hw not in ROADMAP or hw in a.exclude or wy["id"] in seen_ids:
@@ -100,7 +101,7 @@ def main() -> None:
         if not LineString(pts).intersects(core if reg == "core" else region_prov):
             return
         seen_ids.add(wy["id"])
-        ways.append((dict(wy, _reg=reg), t, hw, [(round(x, 2), round(y, 2)) for x, y in pts]))
+        ways.append((dict(wy, _reg=reg, _rural=rural), t, hw, [(round(x, 2), round(y, 2)) for x, y in pts]))
 
     for wy in json.loads((RAW / "roads.json").read_text(encoding="utf-8"))["elements"]:
         hw = wy.get("tags", {}).get("highway")
@@ -121,12 +122,15 @@ def main() -> None:
                     if min(ln.distance(c) for c in cpts) > a.street_radius:
                         skipped += 1
                         continue
+                rural = False
                 if hw.startswith("tertiary") and wy["id"] not in seen_ids:
                     ln = LineString([T.transform(q["lon"], q["lat"]) for q in wy["geometry"]])
                     if min(ln.distance(c) for c in cpts) > a.tertiary_radius:
-                        skipped += 1
-                        continue
-                add_way(wy, "prov")
+                        if not a.villages:
+                            skipped += 1
+                            continue
+                        rural = True  # köy yolu: merkezden uzak, seyrek düğümle (editör bütçesi)
+                add_way(wy, "prov", rural)
         print(f"il geneli: merkezlerden uzak köy yolu atlandı: {skipped}")
         print(f"il geneli yol: +{len(ways) - n0} (çekirdek {n0})")
     if not a.no_collapse:  # bölünmüş şehir caddeleri → tek çift yönlü orta hat (collapse_dual.py)
@@ -169,7 +173,9 @@ def main() -> None:
             for seg in parts:
                 outer = not core.contains(LineString(seg).interpolate(0.5, normalized=True))
                 # il geneli: kırsal yollar daha seyrek düğümle (ETS2 yolu düğümler arasında eğri çizer); bütçe
-                if not outer and hw in ("residential", "unclassified", "road"):
+                if wy.get("_rural"):
+                    tol, mseg = a.simplify_m * 15, a.min_seg * 25
+                elif not outer and hw in ("residential", "unclassified", "road"):
                     tol, mseg = a.simplify_m * 1.4, a.min_seg * 1.6  # ara sokak: bütçe
                 elif not outer:
                     tol, mseg = a.simplify_m, a.min_seg
@@ -194,7 +200,8 @@ def main() -> None:
                 edges.append({"id": len(edges), "osm": wy["id"], "hw": hw, "type": kind, "prio": prio,
                               "name": t.get("name"), "oneway": t.get("oneway") in ("yes", "1", "-1"),
                               "reverse": t.get("oneway") == "-1", "a": nid(seg[0]), "b": nid(seg[-1]),
-                              "len": round(L, 1), "pts": out, "outer": outer})
+                              "len": round(L, 1), "pts": out, "outer": outer,
+                              "rural": bool(wy.get("_rural"))})
 
     # 2b) Çok kısa kenarları (< 4 oyun m) daralt: iki ucu tek düğüm olur. C# 3 m'den kısa yolu kuramıyor
     #     ve atlıyordu → ağda boşluk (çoğu bölünmüş cadde indirgemesinin yakalama artığı).
@@ -454,6 +461,8 @@ def main() -> None:
         if e.get("outer") and len(e["pts"]) > 2:
             tol = 12.0 if e["hw"].startswith(("tertiary", "secondary", "primary", "trunk", "motorway")) else 6.0
             mseg = 40.0 if tol > 10 else 20.0
+            if e.get("rural"):
+                tol, mseg = 22.0, 150.0
             ps = [tuple(c) for c in LineString(e["pts"]).simplify(tol).coords]
             o = [ps[0]]
             for c in ps[1:-1]:

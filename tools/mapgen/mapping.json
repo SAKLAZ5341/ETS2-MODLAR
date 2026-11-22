@@ -158,7 +158,8 @@
   "ground": {
     "_doc": "tools/geo/build_ground.py hücre sınıfları → arazi malzemesi (def/world/terrain_material.sii terrain_mat.<n>) ve bitki örtüsü (def/world/vegetation.sii veg.<ad>). Deniz boş bırakılır.",
     "y": -0.25,
-    "max_segment": 300,
+    "max_segment": 900,
+    "detail_vegetation": false,
     "classes": {
       "grass": {
         "material": "34",

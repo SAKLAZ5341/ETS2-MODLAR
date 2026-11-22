@@ -38,6 +38,9 @@ internal static class Program
             "ppdnav" => PpdNav(cfg, args.Skip(1).ToArray()),
             "companyprefabs" => CompanyPrefabs(cfg),
             "nodetest" => NodeTest(cfg, args.Skip(1).ToArray()),
+            "swapmodels" => SwapModels(cfg),
+            "addbuildings" => AddBuildingsToSaved(cfg, args.Length > 1 ? args[1] : "data/processed/map_graph_s3.json",
+                                       args.Length > 2 ? args[2] : "data/processed/map_export_s3_clear.json"),
             "buildgraph" => BuildGraph(cfg, args.Length > 1 ? args[1] : "data/processed/map_graph_s3.json",
                                        args.Length > 2 ? args[2] : "data/processed/map_export_s3.json"),
             _ => 2,
@@ -827,7 +830,8 @@ internal static class Program
         Console.WriteLine($"reddedilen kavşak düğümleri yazıldı: {rejectedNodes.Count} (data/processed/junction_rejects.json)");
 
         // 3) binalar (map_export'tan, place=true olanlar)
-        int buildings = AddBuildings(map, cfg, Path.Combine(Root, exportRel), new Vector3(off.X, 0, off.Y), noBuild);
+        int buildings = AddBuildings(map, cfg, Path.Combine(Root, exportRel), new Vector3(off.X, 0, off.Y), noBuild,
+                                     Environment.GetEnvironmentVariable("SAKLAZ_PLACEHOLDER"));
 
         // 4) zemin: ground_s3.json sütun parçaları → Terrain öğeleri (yolların biraz altında)
         int ground = AddGround(map, cfg, Path.Combine(Root, "data", "processed", "ground_s3.json"), new Vector3(off.X, 0, off.Y));
@@ -895,6 +899,7 @@ internal static class Program
         float halfDefault = (float)ground.GetProperty("meta").GetProperty("cell").GetDouble() / 2f;
         float y = (float)g.GetProperty("y").GetDouble();
         float maxSeg = (float)g.GetProperty("max_segment").GetDouble();
+        bool detailVeg = !g.TryGetProperty("detail_vegetation", out var dv) || dv.GetBoolean();
         var classes = g.GetProperty("classes");
         int n = 0, bad = 0;
 
@@ -907,7 +912,7 @@ internal static class Program
             // il geneli iri hücreler: genişlik ve bitki yoğunluğu parça başına (build_ground.py "w", "dens")
             float half = r.TryGetProperty("w", out var rw) ? (float)rw.GetDouble() : halfDefault;
             float dens = r.TryGetProperty("dens", out var rd) ? (float)rd.GetDouble() : 1f;
-            float segLen = half > 100 ? Math.Max(maxSeg, 600f) : maxSeg;
+            float segLen = half > 100 ? Math.Max(maxSeg, 900f) : maxSeg;
             // -Z yönünde ilerle (z1 → z0): sol taraf -X, sağ taraf +X
             int segs = Math.Max(1, (int)MathF.Ceiling((z1 - z0) / segLen));
             try
@@ -931,7 +936,7 @@ internal static class Program
                             side.Vegetation[0].From = 0;
                             side.Vegetation[0].To = half;
                         }
-                        side.DetailVegetation = cls is "grass" or "park" or "farm" or "forest" or "scrub";
+                        side.DetailVegetation = detailVeg && cls is "grass" or "park" or "farm" or "forest" or "scrub";
                     }
                 }
                 n += items.Count;
@@ -941,8 +946,31 @@ internal static class Program
         return n;
     }
 
-    static int AddBuildings(Map map, JsonElement cfg, string exportPath, Vector3 off, List<(Vector3 c, float r)> noBuild = null)
+    // ---------------------------------------------------------------- addbuildings
+    // İki aşamalı üretim: editörde "Recompute map" yalnız yollar/prefablar/zemin/depolarla yapılır (editör tüm haritayı
+    // yükler ve "Parameter packet batch system overflow" sınırına binalar da sayılır); sonra binalar kaydedilmiş
+    // haritaya buradan eklenir. Binalar (Model) yeniden hesaplama gerektirmez.
+    static int AddBuildingsToSaved(JsonElement cfg, string graphRel, string exportRel)
     {
+        var graph = JsonDocument.Parse(File.ReadAllText(Path.Combine(Root, graphRel))).RootElement;
+        var off = FindSpawnOffset(graph, cfg);
+        var outDir = cfg.GetProperty("output_map_dir").GetString();
+        var name = cfg.GetProperty("output_map_name").GetString();
+        if (name == "saklaz" || name == "europe") throw new InvalidOperationException("Korumalı ad.");
+        var map = Map.Open(Path.Combine(outDir, name + ".mbd"), (IList<SectorCoordinate>)null);
+        int before = map.MapItems.Values.Count(i => i is Model);
+        int n = AddBuildings(map, cfg, Path.Combine(Root, exportRel), new Vector3(off.X, 0, off.Y));
+        map.Save(outDir, name, true);
+        Console.WriteLine($"Binalar eklendi: {n} (haritada önceden {before} model) → {name}.mbd");
+        return 0;
+    }
+
+    static int AddBuildings(Map map, JsonElement cfg, string exportPath, Vector3 off, List<(Vector3 c, float r)> noBuild = null,
+                            string placeholder = null)
+    {
+        // placeholder ("token|variant|look"): editörün yeniden hesaplaması için ucuz yer tutucu model konur, gerçek
+        // model data/processed/building_swap.json'a yazılır; kayıttan sonra "swapmodels" ile değiştirilir.
+        var swap = new List<object>();
         if (!File.Exists(exportPath)) return 0;
         var export = JsonDocument.Parse(File.ReadAllText(exportPath)).RootElement;
         var b = cfg.GetProperty("buildings");
@@ -958,7 +986,14 @@ internal static class Program
             string Pick(int i, string fb) => parts.Length <= i || parts[i].Length == 0 ? fb : parts[i].Split(',')[(int)(Math.Abs(osm) % parts[i].Split(',').Length)];
             var pos = off + new Vector3((float)bl.GetProperty("x").GetDouble(), 0f, (float)bl.GetProperty("z").GetDouble());
             if (noBuild != null && noBuild.Any(z => Vector3.DistanceSquared(z.c, pos) < z.r * z.r)) continue;
-            var m = Model.Add(map, pos, parts[0], Pick(1, "default"), Pick(2, "default"));
+            string tok = parts[0], vr = Pick(1, "default"), lk = Pick(2, "default");
+            if (!string.IsNullOrEmpty(placeholder))
+            {
+                swap.Add(new { x = Math.Round(pos.X, 2), z = Math.Round(pos.Z, 2), token = tok, variant = vr, look = lk });
+                var ph = placeholder.Split('|');
+                (tok, vr, lk) = (ph[0], ph[1], ph[2]);
+            }
+            var m = Model.Add(map, pos, tok, vr, lk);
             m.Node.Rotation = Quaternion.CreateFromYawPitchRoll((float)(bl.GetProperty("heading_deg").GetDouble() * Math.PI / 180.0), 0, 0);
             // çizim yükü (r_param_packet taşması): ayna/su yansıması kapalı, görüş mesafesi kısa
             if (b.TryGetProperty("view_distance", out var vd)) m.ViewDistance = (ushort)vd.GetInt32();
@@ -966,7 +1001,57 @@ internal static class Program
             m.WaterReflection = false;
             n++;
         }
+        if (!string.IsNullOrEmpty(placeholder))
+            File.WriteAllText(Path.Combine(Root, "data", "processed", "building_swap.json"), JsonSerializer.Serialize(swap));
         return n;
+    }
+
+    // ---------------------------------------------------------------- swapmodels
+    // Editörde yer tutucularla yeniden hesaplanıp kaydedilmiş haritada yer tutucu modelleri gerçek modellere çevirir.
+    static int SwapModels(JsonElement cfg)
+    {
+        var outDir = cfg.GetProperty("output_map_dir").GetString();
+        var name = cfg.GetProperty("output_map_name").GetString();
+        if (name == "saklaz" || name == "europe") throw new InvalidOperationException("Korumalı ad.");
+        var list = JsonDocument.Parse(File.ReadAllText(Path.Combine(Root, "data", "processed", "building_swap.json"))).RootElement;
+        // konum eşleşmesi: 1 m ızgara + en yakın (editör kaydı konumu float olarak yuvarlayabilir)
+        var want = new Dictionary<(long, long), List<(double x, double z, string t, string v, string l, bool used)>>();
+        int total = 0;
+        foreach (var e in list.EnumerateArray())
+        {
+            double x = e.GetProperty("x").GetDouble(), z = e.GetProperty("z").GetDouble();
+            var k = ((long)Math.Floor(x), (long)Math.Floor(z));
+            if (!want.TryGetValue(k, out var l)) want[k] = l = new();
+            l.Add((x, z, e.GetProperty("token").GetString(), e.GetProperty("variant").GetString(), e.GetProperty("look").GetString(), false));
+            total++;
+        }
+        var map = Map.Open(Path.Combine(outDir, name + ".mbd"), (IList<SectorCoordinate>)null);
+        var ph = (Environment.GetEnvironmentVariable("SAKLAZ_PLACEHOLDER") ?? "").Split('|')[0];
+        int ok = 0, miss = 0;
+        foreach (var m in map.MapItems.Values.OfType<Model>().ToList())
+        {
+            if (ph.Length > 0 && m.Name.ToString() != ph) continue; // yalnız yer tutucular
+            var p = m.Node.Position;
+            (long, long) best = default; int bi = -1; double bd = 1.0;
+            for (long i = (long)Math.Floor(p.X) - 1; i <= (long)Math.Floor(p.X) + 1; i++)
+                for (long j = (long)Math.Floor(p.Z) - 1; j <= (long)Math.Floor(p.Z) + 1; j++)
+                    if (want.TryGetValue((i, j), out var l))
+                        for (int q = 0; q < l.Count; q++)
+                        {
+                            if (l[q].used) continue;
+                            double d = Math.Sqrt((l[q].x - p.X) * (l[q].x - p.X) + (l[q].z - p.Z) * (l[q].z - p.Z));
+                            if (d < bd) { bd = d; best = (i, j); bi = q; }
+                        }
+            if (bi < 0) { miss++; continue; }
+            var w = want[best][bi];
+            m.Name = w.t; m.Variant = w.v; m.Look = w.l; ok++;
+            want[best][bi] = w with { used = true };
+        }
+        int want_ = total;
+        map.Save(outDir, name, true);
+        Console.WriteLine($"Model değiştirildi: {ok} (eşleşmeyen {miss}, liste {want_})");
+        if (miss > 0) throw new InvalidOperationException("Yer tutucu eşleşmedi: harita hatalı kalırdı");
+        return 0;
     }
 
     static IEnumerable<int[]> Permutations(int[] items)

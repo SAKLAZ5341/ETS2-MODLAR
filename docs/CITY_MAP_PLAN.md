@@ -304,3 +304,28 @@ Sonraki: tüm Kocaeli.
 
 Sınırlar: köyler (merkezden >3 km tertiary) ve ilçe merkezleri dışındaki sokaklar bütçe nedeniyle yok; bina sayısı
 çekirdekte azaldı (2.489 → ~550 + il geneli 832).
+
+## 22. Editör sınırının çözümü, köy yolları ve gerçekçi bina yoğunluğu – 2026-11-22 14:15
+
+**Editör sınırı (ölçümler):** editör tüm haritayı yükler; çizim kaynakları öğe yüklenirken ayrılır ("Parameter packet batch
+system overflow", "Failed to reserve new buffer record"). Item Visibility ile gizlemek, `r_buffer_page_size` ve model
+çeşitliliğini azaltmak işe yaramadı. Recompute olmadan oyun açılmıyor ("Failed to precache sector data", depolar şehirsiz);
+kayıttan sonra TruckLib ile eklenen modeller oyunda çizilmiyor. İl genelindeki 512 m zemin parçaları pahalıydı
+(maliyet parça uzunluğuyla orantılı): 1.536 m hücreye geçildi.
+
+**Çözüm – yer tutucu yöntemi:**
+1. `clear_buildings.py`: binaları seçer (bkz. aşağı).
+2. `SAKLAZ_PLACEHOLDER='1104|default|default' mapgen buildgraph data/processed/map_graph_s3.json data/processed/map_export_s3_clear.json`
+   → her bina tek parçalı yer tutucu modelle konur, gerçek model `data/processed/building_swap.json`'a yazılır.
+3. Editör: Map > Recompute map (Yes) → File > Save → Exit.
+4. `SAKLAZ_PLACEHOLDER=... mapgen swapmodels` → kayıtlı haritada yer tutucular gerçek modellere çevrilir (konum eşleşmesi;
+   eşleşmeyen olursa hata verir). Oyun bunları hatasız çiziyor (önizleme doğrulandı).
+
+**Binalar:** gerçek boyutlu modeller 1:3 şehre konduğu için çakışma seçilen modelin boyutuyla denetlenir. Öncelik ana cadde,
+sonra büyük OSM binaları, sonra OSM'de bina olmayan konut/ticari/sanayi alanlarında sokak boyu dolgu (17 m aralık).
+Hepsi ayrıntılı Türk/Balkan modeli. Sonuç 7.404 bina (OSM 4.807 + dolgu 2.605) = yolsuz/çakışmasız fiziksel kapasite.
+
+**Köy yolları:** merkezlerden >3 km tertiary yollar seyrek düğümle (`rural`); 430 oyun-km, 1.462 segment.
+
+Sonuç: 1.123 kavşak, 18.028 segment, 7.404 bina, 1.458 zemin öğesi, 27 depo; önizlemede harita/trafik/şirket hatası yok.
+Paket `releases/saklaz_turkiye_map_0.2.0-dev_20261122_1414.scs`.
