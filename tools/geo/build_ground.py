@@ -143,7 +143,7 @@ def main() -> None:
     from shapely.prepared import prep
     sea_p = prep(sea) if sea is not None else None
 
-    def classify(x0, z0, nx, nz, C, outer):
+    def classify(x0, z0, nx, nz, C, outer, sea_runs=False, sea_only=False):
         grid = []
         for i in range(nx):
             col = []
@@ -154,7 +154,10 @@ def main() -> None:
                     col.append(("skip", 0.0))
                     continue
                 if sea_p is not None and sea_p.contains(pt):
-                    col.append(("sea", 0.0))
+                    col.append(("sea", 0.0) if not sea_runs else ("seawater", 0.0))
+                    continue
+                if sea_only:
+                    col.append(("skip", 0.0))
                     continue
                 q = road_tree.query(pt.buffer(a.outer_reach if outer else C * 1.5))
                 near = min(lines[k].distance(pt) for k in q) if len(q) else 1e9
@@ -174,10 +177,10 @@ def main() -> None:
             for i in range(nx):
                 for j in range(nz):
                     c, near = grid[i][j]
-                    if c in ("sea", "skip"):
+                    if c in ("sea", "skip", "seawater"):
                         continue
                     nb = Counter(grid[i + di][j + dj][0] for di in (-1, 0, 1) for dj in (-1, 0, 1)
-                                 if 0 <= i + di < nx and 0 <= j + dj < nz and grid[i + di][j + dj][0] not in ("sea", "skip"))
+                                 if 0 <= i + di < nx and 0 <= j + dj < nz and grid[i + di][j + dj][0] not in ("sea", "skip", "seawater"))
                     top, n = nb.most_common(1)[0]
                     if top != c and n >= 5 and c != "water":
                         g2[i][j] = (top, near)
@@ -187,6 +190,8 @@ def main() -> None:
         def key(c, near):
             if c in ("sea", "skip"):
                 return None
+            if c == "seawater":
+                return ("water", False, "sea")
             if outer:  # il geneli: yalnız orman ağaçlı (çizim bütçesi)
                 return (c, c == "forest" and near > 40)
             trees = c in ("forest", "scrub", "park", "grass") and near > C * 0.75 + 12
@@ -203,6 +208,9 @@ def main() -> None:
                 if k is not None:
                     r = {"x": round(x0 + (i + 0.5) * C, 2), "z0": round(z0 + j * C, 2),
                          "z1": round(z0 + (j2 + 1) * C, 2), "cls": k[0], "trees": k[1], "w": C / 2}
+                    if len(k) > 2:  # deniz: su malzemesi, kıyıdan alçakta (boşluk/gökyüzü görünmesin)
+                        r["y"] = -2.5
+                        r["sea"] = True
                     if outer:
                         r["dens"] = 0.35
                     runs.append(r)
@@ -213,7 +221,11 @@ def main() -> None:
     runs = core_runs if core_runs is not None else         classify(core[0], core[1], int((core[2] - core[0]) // C) + 1, int((core[3] - core[1]) // C) + 1, C, False)
     nc = len(runs)
     CO = a.outer_cell
-    runs += classify(X0, Z0, int((X1 - X0) // CO) + 1, int((Z1 - Z0) // CO) + 1, CO, True)
+    runs += classify(X0, Z0, int((X1 - X0) // CO) + 1, int((Z1 - Z0) // CO) + 1, CO, True, sea_runs=True)
+    # çekirdek kutusundaki deniz (çekirdek zemini dosyadan geldiği için denizi yok): yalnız deniz hücreleri
+    CS = 384.0
+    runs += classify(core[0], core[1], int((core[2] - core[0]) // CS) + 1, int((core[3] - core[1]) // CS) + 1, CS, False,
+                     sea_runs=True, sea_only=True)
     meta = {"scale_divisor": a.scale, "cell": C, "outer_cell": CO, "bbox": [X0, Z0, X1, Z1], "core": core,
             "attribution": "(c) OpenStreetMap contributors, ODbL 1.0"}
     (OUT / f"ground_s{s}.json").write_text(json.dumps({"meta": meta, "runs": runs}, ensure_ascii=False), encoding="utf-8")

@@ -329,3 +329,13 @@ Hepsi ayrıntılı Türk/Balkan modeli. Sonuç 7.404 bina (OSM 4.807 + dolgu 2.6
 
 Sonuç: 1.123 kavşak, 18.028 segment, 7.404 bina, 1.458 zemin öğesi, 27 depo; önizlemede harita/trafik/şirket hatası yok.
 Paket `releases/saklaz_turkiye_map_0.2.0-dev_20261122_1414.scs`.
+
+## 23. Hata taraması – 2026-11-22 15:00
+- Deniz boştu (oyunda gökyüzü/boşluk): `build_ground.py` deniz hücrelerine su malzemeli zemin (y −2,5) ekler; il geneli ve
+  çekirdek kutusu (384 m hücre). Karada kara zemininin altında kalır.
+- `link_through`: kesişimde kalan iki kol ≥60° açıyla da bağlanır.
+- Denendi ve geri alındı: kapalı halkaları bölüp iki ucunu birleştirmek ve zincirde birleşmeyen çiftleri bağlamak →
+  editör "Map corruption detected! Item has inconsistent linkage". Recompute öncesi bu pencere kontrol edilmeli.
+- Kalan ~290 prefabsız uç (rampa ayrılmaları, kavşak deseni olmayan kesişimler) sürüşü engellemez.
+- Editör kayıtta 44 "Item outside sector boundary" uyarısı: il geneli 1.536 m zemin parçaları; oyun logunda yok.
+- Önizleme: harita/trafik/şirket hatası yok. Paket `releases/saklaz_turkiye_map_0.2.0-dev_20261122_1458.scs`.

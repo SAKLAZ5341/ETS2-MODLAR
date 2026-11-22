@@ -912,15 +912,16 @@ internal static class Program
             // il geneli iri hücreler: genişlik ve bitki yoğunluğu parça başına (build_ground.py "w", "dens")
             float half = r.TryGetProperty("w", out var rw) ? (float)rw.GetDouble() : halfDefault;
             float dens = r.TryGetProperty("dens", out var rd) ? (float)rd.GetDouble() : 1f;
+            float ry = r.TryGetProperty("y", out var ryv) ? (float)ryv.GetDouble() : y;
             float segLen = half > 100 ? Math.Max(maxSeg, 900f) : maxSeg;
             // -Z yönünde ilerle (z1 → z0): sol taraf -X, sağ taraf +X
             int segs = Math.Max(1, (int)MathF.Ceiling((z1 - z0) / segLen));
             try
             {
                 var mat = cc.GetProperty("material").GetString();
-                var t = Terrain.Add(map, off + new Vector3(x, y, z1), off + new Vector3(x, y, z1 - (z1 - z0) / segs), mat, half, half);
+                var t = Terrain.Add(map, off + new Vector3(x, ry, z1), off + new Vector3(x, ry, z1 - (z1 - z0) / segs), mat, half, half);
                 var items = new List<Terrain> { t };
-                for (int k = 2; k <= segs; k++) { t = t.Append(off + new Vector3(x, y, z1 - (z1 - z0) * k / segs), mat, half, half); items.Add(t); }
+                for (int k = 2; k <= segs; k++) { t = t.Append(off + new Vector3(x, ry, z1 - (z1 - z0) * k / segs), mat, half, half); items.Add(t); }
                 foreach (var it in items)
                 {
                     it.StepSize = StepSize.Meters16;

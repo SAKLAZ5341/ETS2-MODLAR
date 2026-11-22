@@ -568,12 +568,12 @@ def link_through(edges, junctions, jnodes, arm_dir):
                 continue
             partner[x], partner[y] = y, x
             stats[len(ends)] += 1
-        # ikinci şans: kesişimde düz çift dışında kalan iki kol, ≥90° dönüşle birbirine bağlanır (GPS/iş rotası
+        # ikinci şans: kesişimde düz çift dışında kalan iki kol, ≥60° dönüşle birbirine bağlanır (GPS/iş rotası
         # sürekliliği; aksi halde ikisi de orada çıkmaz biterdi)
         rest = [e for e in ends if e not in used]
         if len(ends) > 2 and len(rest) >= 2:
             for _, dot, x, y, cross in pairs:
-                if x in used or y in used or dot > 0.0:
+                if x in used or y in used or dot > 0.5:
                     continue
                 used |= {x, y}
                 if cross:
@@ -584,6 +584,7 @@ def link_through(edges, junctions, jnodes, arm_dir):
 
     # zincirler: serbest ucu olan kenardan başlayıp ortaklara yürü
     seen, out, endmap = set(), [], {}
+    loop_links = []
 
     def walk(start_id, start_end):
         """start_end ucundan başlayarak zinciri döndürür: [(edge_id, ters_mi)], kenarların yürüme yönünde"""
@@ -621,13 +622,39 @@ def link_through(edges, junctions, jnodes, arm_dir):
                    prio=min(E[e]["prio"] for e, _ in chain),
                    type=min((E[e]["type"] for e, _ in chain), key=lambda t: {"r1_city": 0}.get(t, 1)),
                    reverse=head["reverse"] if len(chain) == 1 else False)
+        if False and na == nb and len(new["pts"]) >= 3:  # kapalı: editörde "inconsistent linkage" verdi
+            # kapalı halka: ETS2 bir yolu kendisine bağlayamaz → ikiye böl, iki ucu C#'ta birleştir
+            m = len(new["pts"]) // 2
+            mid_node = 10_000_000 + len(out)
+            A = dict(new, pts=new["pts"][:m + 1], b=mid_node)
+            B = dict(new, id=len(out) + 1, pts=new["pts"][m:], a=mid_node)
+            for h in (A, B):
+                h["len"] = round(sum(math.dist(p_, q_) for p_, q_ in zip(h["pts"], h["pts"][1:])), 1)
+            out += [A, B]
+            endmap[(e0, "b" if r0 else "a")] = (A["id"], "a")
+            endmap[(e1, "a" if r1 else "b")] = (B["id"], "b")
+            loop_links.append([A["id"], "b", B["id"], "a"])
+            if na not in jnodes:  # halkanın başlangıç düğümü de prefabsızsa orada da birleştir
+                loop_links.append([A["id"], "a", B["id"], "b"])
+            stats["halka"] += 1
+            continue
         out.append(new)
         endmap[(e0, "b" if r0 else "a")] = (new["id"], "a")
         endmap[(e1, "a" if r1 else "b")] = (new["id"], "b")
     for j in junctions:
         for arm in j["arms"]:
             arm["edge"], arm["end"] = endmap[(arm["edge"], arm["end"])]
-    links = [[*endmap[x], *endmap[y]] for x, y in xlinks]
+    links = [[*endmap[x], *endmap[y]] for x, y in xlinks] + loop_links
+    # eşlenmiş ama zincir yürüyüşünde birleşmemiş çiftler (zincir kendine dönünce durur): uçları C#'ta birleştir
+    done = set()
+    for x, y in ([] if True else partner.items()):  # kapalı: editörde "inconsistent linkage" verdi
+        if (y, x) in done or x not in endmap or y not in endmap:
+            continue
+        done.add((x, y))
+        ex_, ey_ = endmap[x], endmap[y]
+        if ex_[0] != ey_[0]:
+            links.append([*ex_, *ey_])
+            stats["birleşmeyen çift"] += 1
     print(f"düz geçiş birleştirme: {sum(stats.values())} bağlantı (kol sayısına göre {dict(stats)}); "
           f"kenar {len(edges)} -> {len(out)}")
     return out, links
