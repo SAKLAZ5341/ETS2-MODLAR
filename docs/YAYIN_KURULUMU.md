@@ -28,10 +28,14 @@ Discord'da: Çıkış aygıtı "Voicemeeter AUX Input", giriş aygıtı "Mikrofo
 OBS bilgisayarı açıkken: `192.168.1.150` gerçekten o bilgisayar olmalı (o bilgisayarda `ipconfig`).
 
 ## OBS bilgisayarı (yapılacak)
-1. Voicemeeter (Banana yeterli) kur, yeniden başlat.
-2. VBAN > gelen akış 1: ad `OYUN PC KULAKLI`, IP `192.168.1.186`, port 6980 → bir girişe (ör. giriş 1).
-   Gelen akış 2: ad `OYUN PC MIKROFO`, IP `192.168.1.186` → başka bir giriş.
-3. Bu girişleri OBS'in dinleyeceği bus'lara gönder (ör. oyun → B1, mikrofon → B2) ve OBS'te
-   "Ses Girişi Yakalama": `Voicemeeter Out B1` (Oyun), `Voicemeeter Out B2` (Mikrofon) ayrı kaynak olarak.
-4. Güvenlik duvarı: Voicemeeter'a özel ağda UDP 6980 izni.
+1. Voicemeeter (Banana veya Potato) kur, bilgisayarı yeniden başlat.
+2. Betiği indir: https://github.com/SAKLAZ5341/ETS2-MODLAR/blob/main/tools/stream/obs_pc_setup.ps1 (Raw → farklı kaydet)
+   ya da depoyu klonla.
+3. PowerShell'i **yönetici olarak** aç ve çalıştır:
+   `powershell -ExecutionPolicy Bypass -File obs_pc_setup.ps1` (yayın bilgisayarında da duymak için `-Monitor`)
+   - gelen akış 1 `OYUN PC KULAKLI` → sanal giriş "Oyun PC" → B1; akış 2 `OYUN PC MIKROFO` → "Mikrofon" → B2
+   - kaynak IP `192.168.1.186`, UDP 6980 güvenlik duvarı izni, Voicemeeter açılışta başlar
+   - betik bu bilgisayarın IP'sini yazar; `192.168.1.150` değilse oyun bilgisayarında
+     `.venv\Scripts\python.exe tools\streamoicemeeter_gaming_pc.py --obs-ip <IP>`
+4. OBS → Ses Girişi Yakalama: `Voicemeeter Out B1` (Oyun), `Voicemeeter Out B2` (Mikrofon) ayrı kaynaklar.
 5. Görüntü: yakalama kartı veya NDI ile oyun bilgisayarından.
