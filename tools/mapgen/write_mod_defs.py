@@ -30,13 +30,20 @@ for c in G["cities"]:
 (M / "city.saklaz.sii").write_text("SiiNunit\n{\n" + "\n".join(inc) + "\n}\n", encoding="utf-8")
 
 from collections import Counter
-dup = [c for c, n in Counter(d["company"] for d in G["depots"]).items() if n > 1]
-if dup:
-    raise SystemExit(f"HATA: aynı şirket birden çok depoda: {dup} (build_city_graph.py assign_cities)")
+kinds = {}
 for d in G["depots"]:
-    x, z = d["body"]
-    # Şirketler harita genelinde benzersiz olduğu için tanım TÜM şehirlere yazılır: CityArea boyutu
-    # (tam/yarım ölçü) nasıl yorumlanırsa yorumlansın depo hangi şehre düşerse tanım bulunur.
+    if kinds.setdefault(d["company"], d["kind"]) != d["kind"]:
+        raise SystemExit(f"HATA: {d['company']} iki farklı depo türünde (build_city_graph.py assign_cities)")
+dup = [k for k, n in Counter((d["company"], d["city"]) for d in G["depots"]).items() if n > 1]
+dup += [k for k, n in Counter((d["kind"], d["city"]) for d in G["depots"]).items() if n > 1]
+if dup:
+    raise SystemExit(f"HATA: bir şehirde aynı şirket/tür iki kez: {dup}")
+done = set()
+for d in G["depots"]:
+    if d["company"] in done:
+        continue
+    done.add(d["company"])
+    # Her şirketin tek prefabı var; tanım TÜM şehirlere yazılır, depo hangi şehre düşerse tanım bulunur.
     cities = {c["token"] for c in G["cities"]} | {d["city"]}
     for t in sorted(cities):
         f = M / "company" / d["company"] / "editor" / f"{t}.sii"

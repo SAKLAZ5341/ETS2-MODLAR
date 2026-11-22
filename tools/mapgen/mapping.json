@@ -32,6 +32,7 @@
     "default": 0
   },
   "buildings": {
+    "_doc_industrial": "Sanayi: blke_45/46 (açık hangar, pembe iskelet) ve 3z001 yola taşan iskelet görünüyordu; Baltık fabrika/depo modelleri (base.scs) kullanılıyor (2026-11-22).",
     "_doc": "Her tür için model listesi 'token|variantlar|lookler'; OSM id'ye göre seçilir. Modeller base.scs'te (Balkan Doğu 'tr' seti, Batı Balkan blokları/dükkânları, Alman depo).",
     "mode": "model",
     "small_house": [
@@ -53,7 +54,8 @@
       "dlc_blke_45|original|default"
     ],
     "industrial": [
-      "3z001|variant1,variant2,variant3,variant4|blue,green,yellow,red,light,dark"
+      "dlc_balt_316|factory|default",
+      "dlc_balt_571|default|default"
     ],
     "mosque": [
       "blke_0w002|default|default"
@@ -78,8 +80,8 @@
       "blkw_34001|default|default"
     ],
     "industrial_far": [
-      "blke_46|default|default,bluegrey",
-      "blke_45|default|default"
+      "dlc_balt_570|default,red_brick|default",
+      "dlc_balt_514|default,wood|default"
     ],
     "mosque_far": [
       "blke_0w002|default|default"

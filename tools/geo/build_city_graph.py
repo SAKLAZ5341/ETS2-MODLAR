@@ -56,6 +56,7 @@ def main() -> None:
     ap.add_argument("--min-hw-gap", type=float, default=70.0, help="otoyol çıkış/katılma prefabları arası en az (oyun m)")
     ap.add_argument("--hw-prefab-len", type=float, default=40.0, help="otoyol çıkış/katılma prefab uzunluğu (oyun m)")
     ap.add_argument("--drop-deadend-len", type=float, default=60.0, help="bu uzunluktan kısa çıkmaz ara sokakları at (oyun m; 0=kapalı)")
+    ap.add_argument("--no-collapse", action="store_true", help="bölünmüş caddeleri tek hatta indirgeme")
     a = ap.parse_args()
     S = a.scale
     s, w, n, e = CFG["core_bbox_swne"]
@@ -74,6 +75,10 @@ def main() -> None:
         if not LineString(pts).intersects(core):
             continue
         ways.append((wy, t, hw, [(round(x, 2), round(y, 2)) for x, y in pts]))
+    if not a.no_collapse:  # bölünmüş şehir caddeleri → tek çift yönlü orta hat (collapse_dual.py)
+        import collapse_dual
+        ways, cst = collapse_dual.collapse(ways, ROADMAP)
+        print(f"bölünmüş cadde indirgeme: {cst}")
     use = Counter()
     for _, _, _, pts in ways:
         for i, p in enumerate(pts):
@@ -122,6 +127,40 @@ def main() -> None:
                           "reverse": t.get("oneway") == "-1", "a": nid(seg[0]), "b": nid(seg[-1]),
                           "len": round(L, 1), "pts": out})
 
+    # 2b) Çok kısa kenarları (< 4 oyun m) daralt: iki ucu tek düğüm olur. C# 3 m'den kısa yolu kuramıyor
+    #     ve atlıyordu → ağda boşluk (çoğu bölünmüş cadde indirgemesinin yakalama artığı).
+    par = {}
+
+    def root(n):
+        while par.get(n, n) != n:
+            n = par[n]
+        return n
+
+    short = 0
+    for ed in edges:
+        if ed["len"] < 4.0:
+            ra, rb = root(ed["a"]), root(ed["b"])
+            if ra != rb:
+                par[rb] = ra
+            short += 1
+    if short:
+        pos = {}
+        for ed in edges:
+            for end, p in (("a", ed["pts"][0]), ("b", ed["pts"][-1])):
+                pos.setdefault(ed[end], p)
+        keep = []
+        for ed in edges:
+            if ed["len"] < 4.0:
+                continue
+            ed["a"], ed["b"] = root(ed["a"]), root(ed["b"])
+            ed["pts"][0], ed["pts"][-1] = pos[ed["a"]], pos[ed["b"]]
+            if ed["a"] == ed["b"] and ed["len"] < 30:
+                continue
+            ed["id"] = len(keep)
+            keep.append(ed)
+        print(f"çok kısa kenar daraltıldı: {short} (kenar {len(edges)} -> {len(keep)})")
+        edges = keep
+
     # 3) düğüm dereceleri ve kavşak adayları
     inc = defaultdict(list)
     for ed in edges:
@@ -151,6 +190,37 @@ def main() -> None:
         excluded |= set(json.loads(rej_path.read_text()))
         excl_path.write_text(json.dumps(sorted(excluded)))
         rej_path.unlink()
+    # Kol zinciri: kavşak düğümünden çıkan kenar, 2 dereceli ve aynı görünüm grubundaki (r1/r2) düğümlerden
+    # geçerek devam eder; bu düğümler 4c'de tek yola birleştirildiği için kolun gerçek uzunluğu zincirdir.
+    # (Önceden ilk OSM parçasının uzunluğu ölçülüyordu: ~13 bin aday "kısa kol" diye eleniyordu.)
+    def arm_chain(ed, end, k):
+        L, chain, cur, cend = 0.0, [ed["id"]], ed, end
+        pts = list(ed["pts"] if end == "a" else ed["pts"][::-1])
+        while True:
+            L += cur["len"]
+            far = cur["b"] if cend == "a" else cur["a"]
+            nxt = inc.get(far, [])
+            if len(nxt) != 2 or far == k or L >= 200:
+                return L, chain, pts
+            (e2, en2) = nxt[0] if nxt[0][0]["id"] != cur["id"] else nxt[1]
+            if e2["id"] == cur["id"] or e2["id"] in chain or cls(e2["type"]) != cls(cur["type"]) \
+                    or cls(e2["type"]) is None or e2["oneway"] != cur["oneway"]:
+                return L, chain, pts
+            chain.append(e2["id"])
+            pts += (e2["pts"] if en2 == "a" else e2["pts"][::-1])[1:]
+            cur, cend = e2, en2
+
+    def chain_dir(pts):
+        o, acc, tgt = pts[0], 0.0, pts[-1]
+        for p, q in zip(pts, pts[1:]):
+            acc += math.dist(p, q)
+            if acc >= 15:
+                tgt = q
+                break
+        dx, dz = tgt[0] - o[0], tgt[1] - o[1]
+        L = math.hypot(dx, dz) or 1
+        return [round(dx / L, 4), round(dz / L, 4)]
+
     cand = []
     for k, lst in inc.items():
         if len(lst) not in (3, 4) or k in excluded:
@@ -160,27 +230,37 @@ def main() -> None:
             continue
         if any(ed["a"] == ed["b"] for ed, _ in lst):
             continue
-        if min(ed["len"] for ed, _ in lst) < a.min_arm:
+        chains = [arm_chain(ed, end, k) for ed, end in lst]
+        if min(c[0] for c in chains) < a.min_arm:
             continue
+        ids = [x for c in chains for x in c[1]]
+        if len(ids) != len(set(ids)):  # iki kol aynı zincir (halka)
+            continue
+        dirs = [chain_dir(c[2]) for c in chains]
+        if any(dirs[i][0] * dirs[j][0] + dirs[i][1] * dirs[j][1] > 0.9 for i in range(len(dirs)) for j in range(i)):
+            continue  # iki kol neredeyse üst üste (prefab açısı tutmaz)
         c = edges[lst[0][0]["id"]]["pts"][0] if lst[0][1] == "a" else lst[0][0]["pts"][-1]
-        cand.append((min(ed["len"] for ed, _ in lst), k, c, lst))
+        cand.append((min(c_[0] for c_ in chains), k, c, lst, chains, dirs))
     cand.sort(key=lambda x: -x[0])  # en uzun kollu (en rahat) kavşaklar önce
     chosen, grid = [], defaultdict(list)
     G = a.min_junction_gap
     used_edges = Counter()
-    for _, k, c, lst in cand:
+    for _, k, c, lst, chains, dirs in cand:
         key = (int(c[0] // G), int(c[1] // G))
         if any(math.dist(c, q) < G for dx in (-1, 0, 1) for dz in (-1, 0, 1) for q in grid[(key[0] + dx, key[1] + dz)]):
             continue
-        # aynı kenarın iki ucunda prefab: kenar 2*yarıçap + pay kadar uzun olmalı
+        # aynı zincirin iki ucunda prefab: zincir 2*yarıçap + pay kadar uzun olmalı
         rad = 23.25 if any(cls(ed["type"]) == "r2" for ed, _ in lst) else a.prefab_radius
-        if any(used_edges[ed["id"]] and ed["len"] < 2 * rad + 8 for ed, _ in lst):
+        if any(used_edges[ch[1][0]] or any(used_edges[x] for x in ch[1]) for ch in chains
+               if ch[0] < 2 * rad + 8):
             continue
         grid[key].append(c)
-        for ed, _ in lst:
-            used_edges[ed["id"]] += 1
+        for ch in chains:
+            for x in ch[1]:
+                used_edges[x] += 1
         chosen.append({"id": len(chosen), "node": k, "x": c[0], "z": c[1], "arms":
-                       [{"edge": ed["id"], "end": end, "cls": cls(ed["type"]), "dir": arm_dir(ed, end)} for ed, end in lst]})
+                       [{"edge": ed["id"], "end": end, "cls": cls(ed["type"]), "dir": d}
+                        for (ed, end), d in zip(lst, dirs)]})
 
     # 3b) Otoyol ayrılma/katılma noktaları (tek yönlü şerit + tek yönlü rampa, sağdan trafik)
     hwj, hgrid = [], defaultdict(list)
@@ -349,13 +429,21 @@ def link_through(edges, junctions, jnodes, arm_dir):
         if x[0] == y[0]:
             return False
         gx, gy = LOOK_GROUP.get(ex["type"]), LOOK_GROUP.get(ey["type"])
-        if cross:
-            return gx != gy and {gx, gy} <= {"r1", "r2"}
-        if gx is None or gx != gy:
+        if gx is None or gy is None:
             return False
-        if gx in ONEWAY_LOOK:  # tek yönlü: biri gelen (b), öbürü giden (a); ters (oneway=-1) karışmasın
-            if {x[1], y[1]} != {"a", "b"} or ex["reverse"] or ey["reverse"]:
+        if cross:  # farklı görünüm (r1↔r2, rampa↔şehir yolu/otoyol şeridi): C# uç düğümleri birleştirir
+            if gx == gy or not {gx, gy} <= {"r1", "r2", "ramp", "hw3"}:
                 return False
+        elif gx != gy:
+            return False
+        ow = [g in ONEWAY_LOOK for g in (gx, gy)]
+        if any(ow) and (ex["reverse"] and ow[0] or ey["reverse"] and ow[1]):
+            return False
+        if all(ow):  # iki tek yönlü: biri gelen (b), öbürü giden (a)
+            if {x[1], y[1]} != {"a", "b"}:
+                return False
+        if cross and "hw3" in (gx, gy) and not all(ow):
+            return False  # otoyol şeridi yalnızca rampayla
         return True
 
     for n, ends in inc.items():
@@ -382,10 +470,23 @@ def link_through(edges, junctions, jnodes, arm_dir):
             used |= {x, y}
             if cross:
                 xlinks.append((x, y))
-                stats["r1-r2"] += 1
+                stats["görünüm-arası"] += 1
                 continue
             partner[x], partner[y] = y, x
             stats[len(ends)] += 1
+        # ikinci şans: kesişimde düz çift dışında kalan iki kol, ≥90° dönüşle birbirine bağlanır (GPS/iş rotası
+        # sürekliliği; aksi halde ikisi de orada çıkmaz biterdi)
+        rest = [e for e in ends if e not in used]
+        if len(ends) > 2 and len(rest) >= 2:
+            for _, dot, x, y, cross in pairs:
+                if x in used or y in used or dot > 0.0:
+                    continue
+                used |= {x, y}
+                if cross:
+                    xlinks.append((x, y))
+                else:
+                    partner[x], partner[y] = y, x
+                stats["dönüşlü"] += 1
 
     # zincirler: serbest ucu olan kenardan başlayıp ortaklara yürü
     seen, out, endmap = set(), [], {}
@@ -531,35 +632,33 @@ def assign_cities(depots, edges, S):
     rects = city_grid(edges, S)
     for d in depots:
         d["city"] = grid_city(rects, d["body"])
-    # Her depo harita genelinde BENZERSİZ bir şirket alır; şirket o depo türünün prefabını ana oyunda da
-    # kullanıyor olmalı (def.scs /def/company/*/editor taraması: data/processed/game_defs/company_prefabs.tsv).
-    # Neden: oyunda her (şirket, şehir) için tek company_def/prefab var; şehir alanları çakışınca aynı şirketin
-    # farklı türde iki deposu "Company item without company assignment" hatası veriyordu.
-    pools = {"generic": ["stokes", "transinet", "posped"],
-             "logistic": ["tradeaux", "posped", "eurogoodies", "lkwlog"],
-             "light_factory": ["trameri", "kathode"]}
-    used = set()
+    # Şirket seçimi: her şirketin TEK bir depo türü var (ana oyunda o prefabı kullanan şirketler,
+    # data/processed/game_defs/company_prefabs.tsv), tanımı tüm şehirlere yazılır. Bir şehirde aynı tür/şirket
+    # iki kez olmaz (place_depots (tür, şehir) benzersiz). Mümkünse haritada az kullanılan şirket seçilir.
+    count, in_city = Counter(), set()
     for d in depots:
-        free = [c for c in pools.get(d["kind"], []) if c not in used]
-        if free:
-            d["company"] = free[0]
-        used.add(d["company"])
+        pool = [c for c in COMPANY_POOLS[d["kind"]] if (c, d["city"]) not in in_city]
+        d["company"] = min(pool, key=lambda c: (count[c], COMPANY_POOLS[d["kind"]].index(c)))
+        count[d["company"]] += 1
+        in_city.add((d["company"], d["city"]))
     return cities
 
 
-# Depo prefabları (ana oyun, Avusturya seti): düğüm0 → düğüm1 aralığı (oyun m). Şirketler sırayla dağıtılır.
+# Depo prefabları (ana oyun, Avusturya seti): düğüm0 → düğüm1 aralığı (oyun m).
 DEPOT_TYPES = [
-    {"company": "stokes", "kind": "generic", "span": 100.0},
-    {"company": "lkwlog", "kind": "logistic", "span": 80.0},
-    {"company": "trameri", "kind": "light_factory", "span": 90.65},
-    {"company": "transinet", "kind": "generic", "span": 100.0},
-    {"company": "tradeaux", "kind": "logistic", "span": 80.0},
-    {"company": "posped", "kind": "logistic", "span": 80.0},
+    {"kind": "logistic", "span": 80.0},
+    {"kind": "generic", "span": 100.0},
+    {"kind": "light_factory", "span": 90.65},
 ]
+COMPANY_POOLS = {"generic": ["stokes", "transinet"],
+                 "logistic": ["tradeaux", "posped"],  # lkwlog, eurogoodies önizlemede "Invalid company item assignment" verdi
+                 "light_factory": ["trameri", "kathode"]}
 
 
-def place_depots(edges, chosen, S, a, max_depots=9, min_gap=300.0, clear=45.0, links=()):
-    """Sanayi poligonu içindeki uzun düz parçalara depo yerleştirir; edges listesini yerinde böler."""
+def place_depots(edges, chosen, S, a, per_city=3, min_gap=250.0, links=()):
+    """Her şehre en çok bir tane her depo türünden yerleştirir; edges listesini yerinde böler.
+    Önce sanayi poligonları içindeki uzun düz parçalar; en az iki depo alamayan şehirlerde sonra sanayi
+    dışı (ör. Darıca'da sanayi alanı neredeyse yok) iki yönlü şehir yolları, giderek daralan boşlukla."""
     from shapely.geometry import Point, Polygon
     from shapely.strtree import STRtree
 
@@ -574,81 +673,106 @@ def place_depots(edges, chosen, S, a, max_depots=9, min_gap=300.0, clear=45.0, l
                 if p.is_valid and p.area > 2000:
                     inds.append(p)
     itree = STRtree(inds)
-    lines = [LineString(e["pts"]) for e in edges]
-    ltree = STRtree(lines)
     jpts = [(j["x"], j["z"]) for j in chosen]
     out, used = [], []
     # Oyun bir şehirde aynı depo prefabını iki şirkete eşleyemiyor ("Invalid company item assignment ...
     # Economy reset - company mismatch", 2026-11-22 önizlemede doğrulandı) → (tür, şehir) benzersiz olmalı.
     rects = city_grid(edges, S)
     kind_city = set()
+    why = Counter()
     next_node = max(max(e["a"], e["b"]) for e in edges) + 1
-    k = 0
-    for ed in sorted(edges, key=lambda e: -e["len"]):
-        if len(out) >= max_depots:
+    need = min(t["span"] for t in DEPOT_TYPES) + 24
+
+    for industrial, clear in ((True, 45.0), (True, 36.0), (False, 40.0), (False, 32.0)):
+        have = Counter(c for _, c in kind_city)
+        if not industrial and all(have[c] >= 2 for c in CITY_TOKENS.values()):
             break
-        if ed["type"] not in ("r1_city", "r1_city_narrow") or ed["oneway"]:
-            continue
-        need = min(t["span"] for t in DEPOT_TYPES) + 24
-        pts = ed["pts"]
-        for i in range(len(pts) - 1):
-            P, Q = pts[i], pts[i + 1]
-            L = math.dist(P, Q)
-            if L < need:
+        lines = [LineString(e["pts"]) for e in edges]  # her geçişte yeniden: önceki bölmeler dahil
+        ltree = STRtree(lines)
+        k = len(out)
+        for ed in sorted(edges, key=lambda e: -e["len"]):
+            if ed["type"] not in ("r1_city", "r1_city_narrow") or ed["oneway"]:
                 continue
-            mid = ((P[0] + Q[0]) / 2, (P[1] + Q[1]) / 2)
-            if any(math.dist(mid, u) < min_gap for u in used) or any(math.dist(mid, j) < need / 2 + 14 for j in jpts):
-                continue
-            mp = Point(mid)
-            if not any(inds[q].contains(mp) for q in itree.query(mp)):
-                continue
-            ux, uz = (Q[0] - P[0]) / L, (Q[1] - P[1]) / L
-            side = None
-            for sgn in (1, -1):  # yolun sağı/solu: depo gövdesi ~55 m içeride
-                nx, nz = -uz * sgn, ux * sgn
-                body = Point(mid[0] + nx * 60, mid[1] + nz * 60)
-                near = [q for q in ltree.query(body.buffer(clear)) if q != ed["id"] and lines[q].distance(body) < clear]
-                if not near:
-                    side = (nx, nz)
-                    break
-            if side is None:
-                continue
-            bcity = grid_city(rects, (mid[0] + side[0] * 55, mid[1] + side[1] * 55))
-            # bu noktaya sığan ve o şehirde henüz olmayan türü seç (sıra k ile döner → türler dengeli)
-            cands = [DEPOT_TYPES[(k + q) % len(DEPOT_TYPES)] for q in range(len(DEPOT_TYPES))]
-            typ = next((t for t in cands if L >= t["span"] + 24 and (t["kind"], bcity) not in kind_city
-                        and not any(math.dist(mid, j) < t["span"] / 2 + 26 for j in jpts)), None)
-            if typ is None:
-                continue
-            kind_city.add((typ["kind"], bcity))
-            h = typ["span"] / 2
-            n0 = (round(mid[0] - ux * h, 3), round(mid[1] - uz * h, 3))
-            n1 = (round(mid[0] + ux * h, 3), round(mid[1] + uz * h, 3))
-            # kenarı böl: A = baş..n0, B = n1..son
-            ida, idb = next_node, next_node + 1
-            next_node += 2
-            B = dict(ed, id=len(edges), a=idb, pts=[list(n1)] + [list(p) for p in pts[i + 1:]])
-            ed["pts"] = [list(p) for p in pts[:i + 1]] + [list(n0)]
-            ed["b"] = ida
-            for e2 in (ed, B):
-                e2["len"] = round(sum(math.dist(p, q) for p, q in zip(e2["pts"], e2["pts"][1:])), 1)
-            # B, eski kenarın b ucundaki kavşak kolunu devralır
-            for j in chosen:
-                for arm in j["arms"]:
-                    if arm["edge"] == ed["id"] and arm["end"] == "b":
-                        arm["edge"] = B["id"]
-            for lk in links:  # [e1, uç1, e2, uç2]
-                for q in (0, 2):
-                    if lk[q] == ed["id"] and lk[q + 1] == "b":
-                        lk[q] = B["id"]
-            edges.append(B)
-            used.append(mid)
-            out.append({"id": len(out), "company": typ["company"], "kind": typ["kind"],
-                        "n0": list(n0), "n1": list(n1),
-                        "body": [round(mid[0] + side[0] * 55, 2), round(mid[1] + side[1] * 55, 2)],
-                        "arm0": {"edge": ed["id"], "end": "b"}, "arm1": {"edge": B["id"], "end": "a"}})
-            k += 1
-            break
+            pts = ed["pts"]
+            for i in range(len(pts) - 1):
+                P, Q = pts[i], pts[i + 1]
+                L = math.dist(P, Q)
+                if L < need:
+                    continue
+                mid = ((P[0] + Q[0]) / 2, (P[1] + Q[1]) / 2)
+                mp = Point(mid)
+                in_ind = any(inds[q].contains(mp) for q in itree.query(mp))
+                if industrial != in_ind:
+                    continue
+                if any(math.dist(mid, u) < min_gap for u in used):
+                    why["başka depoya yakın"] += 1
+                    continue
+                ux, uz = (Q[0] - P[0]) / L, (Q[1] - P[1]) / L
+                side = None
+                for sgn in (1, -1):  # yolun sağı/solu: depo gövdesi ~55 m içeride
+                    nx, nz = -uz * sgn, ux * sgn
+                    body = Point(mid[0] + nx * 60, mid[1] + nz * 60)
+                    near = [q for q in ltree.query(body.buffer(clear)) if edges[q] is not ed
+                            and lines[q].distance(body) < clear]
+                    if not near:
+                        side = (nx, nz)
+                        break
+                if side is None:
+                    why["gövde yeri dolu"] += 1
+                    continue
+                bcity = grid_city(rects, (mid[0] + side[0] * 55, mid[1] + side[1] * 55))
+                have = Counter(c for _, c in kind_city)
+                if have[bcity] >= per_city or (not industrial and have[bcity] >= 2):
+                    why["şehir dolu"] += 1
+                    continue
+                cands = [DEPOT_TYPES[(k + q) % len(DEPOT_TYPES)] for q in range(len(DEPOT_TYPES))]
+                typ = next((t for t in cands if L >= t["span"] + 24 and (t["kind"], bcity) not in kind_city
+                            and not any(math.dist(mid, j) < t["span"] / 2 + 26 for j in jpts)), None)
+                if typ is None:
+                    why["tür sığmıyor/kavşağa yakın"] += 1
+                    continue
+                h = typ["span"] / 2
+                n0 = (round(mid[0] - ux * h, 3), round(mid[1] - uz * h, 3))
+                n1 = (round(mid[0] + ux * h, 3), round(mid[1] + uz * h, 3))
+                # Depo bütünüyle tek şehir alanında olmalı: oyun öğeyi sınırdaki komşu şehre sayabiliyor
+                # (Darıca deposu Gebze'ye sayılıp "Invalid company item assignment" verdi, 2026-11-22).
+                probe = [n0, n1, mid] + [(mid[0] + side[0] * dd + ux * ee, mid[1] + side[1] * dd + uz * ee)
+                                         for dd in (30, 60, 90) for ee in (-h - 10, 0, h + 10)]
+                if any(grid_city(rects, q) != bcity for q in probe):
+                    why["şehir alanı sınırında"] += 1
+                    continue
+                kind_city.add((typ["kind"], bcity))
+                # kenarı böl: A = baş..n0, B = n1..son
+                ida, idb = next_node, next_node + 1
+                next_node += 2
+                B = dict(ed, id=len(edges), a=idb, pts=[list(n1)] + [list(p) for p in pts[i + 1:]])
+                ed["pts"] = [list(p) for p in pts[:i + 1]] + [list(n0)]
+                ed["b"] = ida
+                for e2 in (ed, B):
+                    e2["len"] = round(sum(math.dist(p, q) for p, q in zip(e2["pts"], e2["pts"][1:])), 1)
+                # B, eski kenarın b ucundaki kavşak kolunu / bağlantıyı / depo kolunu devralır
+                for j in chosen:
+                    for arm in j["arms"]:
+                        if arm["edge"] == ed["id"] and arm["end"] == "b":
+                            arm["edge"] = B["id"]
+                for lk in links:  # [e1, uç1, e2, uç2]
+                    for q in (0, 2):
+                        if lk[q] == ed["id"] and lk[q + 1] == "b":
+                            lk[q] = B["id"]
+                for d in out:
+                    for arm in (d["arm0"], d["arm1"]):
+                        if arm["edge"] == ed["id"] and arm["end"] == "b":
+                            arm["edge"] = B["id"]
+                edges.append(B)
+                used.append(mid)
+                out.append({"id": len(out), "company": None, "kind": typ["kind"],
+                            "n0": list(n0), "n1": list(n1), "industrial": industrial,
+                            "body": [round(mid[0] + side[0] * 55, 2), round(mid[1] + side[1] * 55, 2)],
+                            "arm0": {"edge": ed["id"], "end": "b"}, "arm1": {"edge": B["id"], "end": "a"}})
+                k += 1
+                break
+    have = Counter(c for _, c in kind_city)
+    print(f"depolar: {len(out)} (şehre göre {dict(have)}); elenen: {dict(why)}")
     return out
 
 

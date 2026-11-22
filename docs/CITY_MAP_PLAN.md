@@ -253,3 +253,32 @@ Analiz: 2.062 düğümde iki serbest uç (çıkmaz sokak budamasından sonra yen
 
 Sonraki işler: OSM'de çift şeritli (iki tek yönlü yol) şehir caddeleri hâlâ iki ayrı çift yönlü yol olarak çiziliyor (tek eksene indirilmeli);
 Gebze/Darıca'ya depo; rampa↔şehir yolu bağlantıları; tüm Kocaeli.
+
+## 20. Kalan eksikler – 2026-11-22 11:55
+
+- **Bölünmüş caddeler** (`tools/geo/collapse_dual.py`, `build_city_graph.py` 1. adımdan sonra): OSM'de her yönü ayrı
+  tek yönlü çizili şehir caddeleri (solda ters yönlü eş şerit, ≤38 m) eşleştirilir, eşleşme grafiği 2 renge boyanır;
+  biri orta hatta kayıp çift yönlü olur, öbürü silinir, yan sokaklar orta hatta taşınır. 589 çift, 162 km orta hat.
+  Tek yönlü şehir yolu 125 km → 23 km. `--no-collapse` ile kapatılır.
+- **Çok kısa kenarlar** (<4 m) düğüm birleştirmeyle daraltılır (C# bunları atlıyordu → ağda boşluk). Atlanan yol 92 → 23.
+- **Kavşak kolu uzunluğu** artık 2 dereceli aynı sınıf düğümlerden geçen zincirle ölçülür (önce ilk OSM parçası:
+  ~13 bin aday "kısa kol" diye eleniyordu). Kavşak 487 → 564, reddedilen 0 (2 tur).
+- **Yol sürekliliği** (`link_through`): rampa ↔ şehir yolu/r2 ve rampa ↔ otoyol şeridi (yönü tutarlıysa) görünüm-arası
+  bağlantı olarak C#'ta birleştirilir; kesişimde düz çift dışında kalan iki kol ≥90° dönüşle bağlanır.
+  Görünüm-arası bağlantı 165 (başarısız 11 + yön planı 8). Bağlantısız uçlu düğüm 275 → ~186 (27'si kapalı halka).
+- **Depolar** her şehirde tür başına bir (`place_depots` per_city=3): önce sanayi alanı, sonra sanayi dışı iki yönlü
+  şehir yolu. Depo noktalarının hepsi (düğümler + gövde çevresi) aynı CityArea dikdörtgeninde olmalı: sınırdaki Darıca
+  deposu oyunda Gebze'ye sayılıp "Invalid company item assignment" verdi. `lkwlog` ve `eurogoodies` lojistik deposunda
+  hep bu hatayı verdiği için havuzdan çıkarıldı; şirketler artık birden çok şehirde (aynı tür) olabilir.
+  Sonuç 10 depo: Gebze (Trameri, Tradeaux), Darıca (Kathode, Posped), Çayırova (Posped, Trameri, Transinet),
+  Dilovası (Tradeaux, Kathode, Stokes).
+- **Sanayi binaları**: `3z001` ve `blke_45/46` (açık hangar) pembe iskelet görünüyordu ve yola taşıyordu →
+  `factory_hall_01_balt` (varyant `factory`), `warehouse_04_balt`, `factory_hall_06_balt`, `warehouse_03_balt` (hepsi base.scs).
+- **Bina–yol çakışması** (`tools/geo/clear_buildings.py` → `map_export_s3_clear.json`): binalar indirgeme öncesi yollara
+  göre seçilmişti; güncel yol tamponuna (yarı genişlik + 0,5 m) ve kavşaklara (20 m) değen 964 bina çıkarıldı, 2.489 kaldı.
+  Üretim: `mapgen buildgraph data/processed/map_graph_s3.json data/processed/map_export_s3_clear.json`.
+- Sonuç: yol 4.131, segment 13.230, bağlantı 1.931, prefab hata 0; editör recompute + save, taşma yok, model hatası yok;
+  önizlemede harita/trafik/şirket hatası yok (yalnız önizlemeye özgü tek "Economy reset" satırı), sürüş kontrol edildi.
+- Paket `releases/saklaz_turkiye_map_0.2.0-dev_20261122_1154.scs` (70 dosya) → `Belgeler\Euro Truck Simulator 2\mod\saklaz_turkiye_map_0.2.0-dev.scs`.
+
+Sonraki: tüm Kocaeli.
