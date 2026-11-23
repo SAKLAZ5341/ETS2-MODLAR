@@ -80,6 +80,15 @@ def skipped_edges(g, path="data/processed/edge_skips.json"):
 def main(path):
     g = json.load(open(path, encoding="utf-8"))
     g["skip_edges"] = skipped_edges(g)
+    # C#'ın birleştiremediği uç bağlantıları (link_rejects.json) oyunda yok: denetimden düşülür
+    import os
+    lr = "data/processed/link_rejects.json"
+    if os.path.exists(lr):
+        rej = {(int(round(x * 10)), int(round(z * 10))) for x, z in json.load(open(lr))}
+        E = {e["id"]: e for e in g["edges"]}
+        key = lambda l, i: (lambda p: (int(round(p[0] * 10)), int(round(p[1] * 10))))(
+            E[l[i]]["pts"][0] if l[i + 1] == "a" else E[l[i]]["pts"][-1])
+        g["road_links"] = [l for l in g["road_links"] if key(l, 0) not in rej and key(l, 2) not in rej]
     adj = build(g)
     radj = defaultdict(set)
     for u, vs in adj.items():

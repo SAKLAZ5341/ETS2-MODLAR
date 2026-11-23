@@ -116,6 +116,8 @@ def main() -> None:
     ap.add_argument("--core-only", action="store_true", help="yalnız Gebze/Darıca/Çayırova/Dilovası çekirdeği")
     ap.add_argument("--cluster-len", type=float, default=22.0, help="bu uzunluktan kısa kesişim-kesişim parçası daraltılır (oyun m)")
     ap.add_argument("--pick-len", type=float, default=0.0, help="prefabı engelleyen ana yol kolu bu uzunluktan kısaysa kaldırılır")
+    ap.add_argument("--ramp-reach", type=float, default=260.0, help="rampa-şehir bağlantısı en uzun (oyun m; 0=kapalı)")
+    ap.add_argument("--ramp-min-comp", type=float, default=15000.0, help="rampa yalnız bu uzunluktan büyük şehir ağına")
     ap.add_argument("--max-angle", type=float, default=65.0, help="kavşak prefabı kol açı hatası üst sınırı (derece; C# mapping 70)")
     ap.add_argument("--connect-iters", type=int, default=12, help="bağlanamayan kesişimlerde sokak kaldırma turu")
     ap.add_argument("--tertiary-radius", type=float, default=3000.0, help="il geneli tertiary: merkeze en çok (gerçek m)")
@@ -793,6 +795,10 @@ def main() -> None:
     from directed import largest_scc
     _scc0 = largest_scc({"edges": edges, "junctions": chosen, "hw_junctions": hwj, "ramp_forks": forks,
                          "road_links": road_links})
+    if a.ramp_reach > 0 and ramp_city_links(edges, chosen, hwj, forks, road_links, reach_m=a.ramp_reach,
+                                             min_comp=a.ramp_min_comp):
+        edges, chosen = force_tees(edges, chosen, hwj + forks, road_links, a)
+        road_links = heal_links(edges, chosen + hwj + forks, road_links)
     if ramp_access(edges, chosen, hwj, forks, road_links, _scc0, lane_based=True):
         edges, chosen = force_tees(edges, chosen, hwj + forks, road_links, a)
         road_links = heal_links(edges, chosen + hwj + forks, road_links)
@@ -825,7 +831,7 @@ def main() -> None:
     sys.path.insert(0, str(ROOT / "tools" / "validation"))
     from directed import largest_scc
     fix_city_ramp_arms(edges, chosen, hwj + forks, road_links)
-    filter_links(edges, road_links)
+    filter_links(edges, road_links, use_rejects=False)
     main_edges = largest_scc({"edges": edges, "junctions": chosen, "hw_junctions": hwj, "ramp_forks": forks,
                               "road_links": road_links})
     for _ in range(3):  # güçlü bağlı ağın dışında kalan büyük ilçe ağlarını iki yönlü bağlantı yoluyla bağla
@@ -844,9 +850,14 @@ def main() -> None:
         road_links = heal_links(edges, chosen + hwj + forks, road_links)
         uturn_links(edges, chosen + hwj + forks, road_links)
         fix_city_ramp_arms(edges, chosen, hwj + forks, road_links)
-        filter_links(edges, road_links)
+        filter_links(edges, road_links, use_rejects=False)
         main_edges = largest_scc({"edges": edges, "junctions": chosen, "hw_junctions": hwj, "ramp_forks": forks,
                                   "road_links": road_links})
+    # Yerleşim için oyundaki gerçek ağ: önceki C# derlemesinin birleştiremediği bağlantılar düşülür (onarımlar ret
+    # listesinden bağımsız → her derlemede aynı ağ; C# aynı bağlantıları yine reddeder, yerleşim bunu bilir)
+    _real = filter_links(edges, [list(l) for l in road_links], use_rejects=True)
+    main_edges = largest_scc({"edges": edges, "junctions": chosen, "hw_junctions": hwj, "ramp_forks": forks,
+                              "road_links": _real})
     print(f"ana bağlı ağ: {len(main_edges)}/{len(edges)} kenar, "
           f"%{100 * sum(e['len'] for e in edges if e['id'] in main_edges) / sum(e['len'] for e in edges):.1f} uzunluk")
     depots = place_depots(edges, chosen, S, a, links=road_links, allowed=main_edges)
@@ -1309,6 +1320,92 @@ def comp_finder(edges, junctions, links):
     return lambda eid: f(("e", eid))
 
 
+def ramp_city_links(edges, chosen, hwj, forks, links, reach_m=260.0, clear=40.0, min_comp=5000.0):
+    """Kavşak rampaları şehre bağlansın: boşta BİTEN çıkış rampası ve boşta BAŞLAYAN katılma rampası en yakın iki yönlü
+    şehir yoluna kısa bağlantı yolu (Bezier, uçta rampa yönünde) + T kavşak (force_tees) ile bağlanır. Yoksa otoyoldan
+    çıkıp dönülemiyor, otoyol halkası bile güçlü bağlı ağın dışında kalıyordu (2026-11-23)."""
+    from shapely.geometry import Point
+    from shapely.strtree import STRtree
+    allj = chosen + hwj + forks
+    used = {(x["edge"], x["end"]) for j in allj for x in j["arms"]}
+    used |= {(l[0], l[1]) for l in links} | {(l[2], l[3]) for l in links}
+    centers = [(j["x"], j["z"]) for j in allj]
+    cgrid = defaultdict(list)
+    for c in centers:
+        cgrid[(int(c[0] // 100), int(c[1] // 100))].append(c)
+
+    def clear_of(p):
+        gx, gz = int(p[0] // 100), int(p[1] // 100)
+        return all(math.dist(p, q) >= clear for dx in (-1, 0, 1) for dz in (-1, 0, 1) for q in cgrid[(gx + dx, gz + dz)])
+    # yalnız büyük şehir ağı parçalarına (≥ 5 km): küçük kopuk sokak parçasına bağlanan rampa tuzak olur
+    comp = comp_finder(edges, allj, links)
+    clen = Counter()
+    for e in edges:
+        clen[comp(e["id"])] += e["len"]
+    tw = [e for e in edges if (e["type"] in CITY or e["type"] in R2) and clen[comp(e["id"])] >= min_comp]
+    lines = [LineString(e["pts"]) for e in tw]
+    tree = STRtree(lines)
+    allines = [LineString(e["pts"]) for e in edges]
+    atree = STRtree(allines)
+    ends = []
+    for e in edges:
+        if e["type"] != "ramp_1lane" or e.get("reverse"):
+            continue
+        for end in ("a", "b"):
+            if (e["id"], end) not in used:
+                ends.append((e, end))
+    made = 0
+    for r, rend in ends:
+        Q = tuple(r["pts"][0] if rend == "a" else r["pts"][-1])
+        rt = end_tangent(r, rend)
+        best = None
+        for i in tree.query(Point(Q).buffer(reach_m)):
+            ln, e = lines[i], tw[i]
+            if e["id"] == r["id"]:
+                continue
+            na = (23.5 if e["type"] in R2 else 18.5) + (22.0 if (e["id"], "a") in used else 4.0)
+            nb = (23.5 if e["type"] in R2 else 18.5) + (22.0 if (e["id"], "b") in used else 4.0)
+            if ln.length < na + nb:
+                continue
+            s_ = min(max(ln.project(Point(Q)), na), ln.length - nb)
+            Pp = ln.interpolate(s_)
+            P = (Pp.x, Pp.y)
+            d = math.dist(P, Q)
+            if d < 25 or d > reach_m or (best and d >= best[0]) or not clear_of(P):
+                continue
+            ux, uz = (Q[0] - P[0]) / d, (Q[1] - P[1]) / d
+            P2 = ln.interpolate(min(ln.length, s_ + 2))
+            P1 = ln.interpolate(max(0, s_ - 2))
+            tl = math.dist((P1.x, P1.y), (P2.x, P2.y)) or 1
+            if abs(ux * (P2.x - P1.x) / tl + uz * (P2.y - P1.y) / tl) > 0.85:
+                continue  # T için yola yaklaşık dik
+            a_ = (P[0] + ux * 1.5, P[1] + uz * 1.5)
+            tQ = rt if rend == "a" else (-rt[0], -rt[1])
+            npts = bezier_pts(a_, (ux, uz), Q, tQ)
+            if not smooth_enough(npts, (ux, uz), tQ, 40.0):
+                continue
+            pl = LineString(npts)
+            if any(edges[q]["id"] not in (e["id"], r["id"]) and allines[q].intersects(pl)
+                   and allines[q].distance(Point(Q)) > 1 for q in atree.query(pl)):
+                continue
+            best = (d, P, npts, e["id"])
+        if not best:
+            continue
+        d, P, npts, eid = best
+        npts = thin_curve(npts)
+        n0 = max(max(x["a"], x["b"]) for x in edges) + 1
+        edges.append({"id": len(edges), "osm": 0, "hw": "tertiary", "type": "r1_city", "prio": 6, "oneway": False,
+                      "reverse": False, "a": n0, "b": n0 + 1, "pts": npts,
+                      "len": round(sum(math.dist(p_, q_) for p_, q_ in zip(npts, npts[1:])), 1), "connector": True})
+        links.append([len(edges) - 1, "b", r["id"], rend])
+        used |= {(r["id"], rend), (len(edges) - 1, "b")}
+        centers.append(P)
+        cgrid[(int(P[0] // 100), int(P[1] // 100))].append(P)
+        made += 1
+    print(f"rampa-şehir bağlantısı: {made} / {len(ends)} boşta rampa ucu")
+    return made
+
+
 def ramp_access(edges, chosen, hwj, forks, links, targets, min_group=4000.0, reach_m=450.0, lane_based=False):
     """Güçlü bağlı ağın dışında kalan büyük şehir ağı için yönlü eksik tamamlama: gruptan ağa çıkış yoksa boşta
     BAŞLAYAN ve ağa ulaşan bir katılma rampasına, ağdan gruba giriş yoksa boşta BİTEN ve ağdan gelinen bir çıkış
@@ -1412,7 +1509,7 @@ def ramp_access(edges, chosen, hwj, forks, links, targets, min_group=4000.0, rea
             rt = end_tangent(Rr, rend)
             # P→Q yönünde Q'daki teğet: rampaya giriş (a) → rampa yönü; rampadan çıkış (b) → rampa yönünün tersi
             tQ = rt if rend == "a" else (-rt[0], -rt[1])
-            npts = bezier_pts(a_, (ux, uz), Q, tQ)
+            npts = thin_curve(bezier_pts(a_, (ux, uz), Q, tQ))
             edges.append({"id": len(edges), "osm": 0, "hw": "tertiary", "type": "r1_city", "prio": 6, "oneway": False,
                           "reverse": False, "a": n0, "b": n0 + 1, "pts": npts,
                           "len": round(sum(math.dist(p_, q_) for p_, q_ in zip(npts, npts[1:])), 1), "connector": True})
@@ -2172,12 +2269,12 @@ def force_hw_tees(edges, chosen, hwj, forks, links, a, reach=60.0):
 LINK_REJ = ROOT / "data" / "processed" / "link_rejects.json"
 
 
-def filter_links(edges, links):
+def filter_links(edges, links, use_rejects=True):
     """C#'ın uç birleştirme güvenlik kuralının aynısı (Program.cs 2b): uçlar ≤ 6,5 m, yollar ≥ 3 m kalır, ≥105° dönüş
     yok; ayrıca önceki C# derlemesinde başarısız olan birleşim noktaları (link_rejects.json, birikimli). Doğrulama ve
     depo/garaj yerleşimi oyundaki gerçek bağlantılarla yapılsın diye."""
     rej = set()
-    if LINK_REJ.exists():
+    if use_rejects and LINK_REJ.exists():
         rej = {(int(round(x * 10)), int(round(z * 10))) for x, z in json.loads(LINK_REJ.read_text())}
     E = {e["id"]: e for e in edges}
 
@@ -2232,6 +2329,20 @@ def bezier_pts(P, t0, Q, t1, step=5.0):
         out.append([u ** 3 * P[0] + 3 * u * u * t * B1[0] + 3 * u * t * t * B2[0] + t ** 3 * Q[0],
                     u ** 3 * P[1] + 3 * u * u * t * B1[1] + 3 * u * t * t * B2[1] + t ** 3 * Q[1]])
     out[0], out[-1] = list(P), list(Q)
+    return out
+
+
+def thin_curve(pts, end_keep=10.0, mid_step=15.0):
+    """Çıktı için eğriyi seyrelt: uçlarda 5 m'lik noktalar (birleşim yönü), ortada ~15 m (editör segment bütçesi)."""
+    L = [0.0]
+    for p_, q_ in zip(pts, pts[1:]):
+        L.append(L[-1] + math.dist(p_, q_))
+    tot, out, last = L[-1], [pts[0]], 0.0
+    for p_, l_ in zip(pts[1:-1], L[1:-1]):
+        if l_ <= end_keep or tot - l_ <= end_keep or l_ - last >= mid_step:
+            out.append(p_)
+            last = l_
+    out.append(pts[-1])
     return out
 
 
@@ -2327,7 +2438,7 @@ def uturn_links(edges, junctions, links, reach=120.0, skip_boxes=()):
             t1 = end_tangent(Ei, fend)  # boşta başlayan: trafik bu yönde gider
             if Ei.get("reverse"):
                 t1 = (-t1[0], -t1[1])
-            npts = bezier_pts(P, t0, Q, t1)
+            npts = thin_curve(bezier_pts(P, t0, Q, t1))
             L = sum(math.dist(p_, q_) for p_, q_ in zip(npts, npts[1:]))
             edges.append({"id": len(edges), "osm": 0, "hw": "motorway_link", "type": "ramp_1lane", "prio": 4,
                           "oneway": True, "reverse": False, "a": nn, "b": nn + 1, "pts": npts, "len": round(L, 1),
@@ -2630,7 +2741,7 @@ def tr_upper(t):
     return t.replace("i", "İ").replace("ı", "I").upper()
 
 
-def place_signs(edges, items, cities, S, main_edges, max_place=450):
+def place_signs(edges, items, cities, S, main_edges, max_place=650):
     """Şehir giriş tabelaları (ad, nüfus, rakım) ve mahalle/köy ad tabelaları. Tabela yolun trafik yönüne göre sağına
     konur, ön yüzü (+Z) gelen sürücüye bakar (oyun verisinden ölçüldü). Çıktı: graph["signs"]."""
     from shapely.geometry import Point
@@ -2718,9 +2829,13 @@ def place_signs(edges, items, cities, S, main_edges, max_place=450):
                 continue
             seen.add(el["id"])
             places.append((g(*T.transform(el["lon"], el["lat"])), t["name"], t["place"]))
+    # bilinen yerler (AVM, hastane, belediye, meydan): ad tabelası
+    import landmarks as lmmod
+    for kind, name, ux_, uy_, lid in lmmod.load(lambda lo, la: T.transform(lo, la)):
+        places.append((g(ux_, uy_), name, "landmark"))
     rects = city_grid(edges, S)
     n_place = 0
-    for P, name, kind in sorted(places, key=lambda x: x[2] == "village"):
+    for P, name, kind in sorted(places, key=lambda x: {"landmark": 0, "village": 2}.get(x[2], 1)):
         if n_place >= max_place:
             break
         if not any(r["x0"] <= P[0] <= r["x1"] and r["z0"] <= P[1] <= r["z1"] for r in rects):
@@ -2740,7 +2855,13 @@ def place_signs(edges, items, cities, S, main_edges, max_place=450):
             d = (-d[0], -d[1])
         if near_j((X.x, X.y), 28):
             continue
-        nm = name if len(name) <= 22 else name.split()[0]
+        nm = name
+        for a_, b_ in (("Alışveriş Merkezi", "AVM"), ("Devlet Hastanesi", "Devlet Hast."), ("Hastanesi", "Hast."),
+                       ("Belediyesi", "Bld."), ("Eğitim ve Araştırma", "EAH"), ("Meydanı", "Myd.")):
+            if len(nm) > 22:
+                nm = nm.replace(a_, b_)
+        if len(nm) > 22:
+            nm = nm[:22].rsplit(" ", 1)[0]
         if add((X.x, X.y), d, "r2" if TW[i]["type"] in R2 else "r1",
                [[SIGN_PLACE["name"], SIGN_PLACE["area"], tr_upper(nm)]], SIGN_PLACE["model"], SIGN_PLACE["template"], 60):
             n_place += 1

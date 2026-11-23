@@ -899,20 +899,54 @@ internal static class Program
                 return f;
             }
             bool Free(int id) => !OneWayKind(edgeById[id].GetProperty("type").GetString()) && !OriginEnd(id, "a") && !OriginEnd(id, "b");
-            var fixedE = new HashSet<int>();
+            // Paritelim birleşim-bul: her serbest (iki yönlü, origin'e bağlı olmayan) yol için x = ters kur; sabit yollar
+            // x = 0 (sanal FIXED düğümü). Bağlantı kısıtı: (a1^n1^x1) != (a2^n2^x2) → x1 ^ x2 = 1^a1^n1^a2^n2.
+            // Sıralı açgözlü plan 78 bağlantıyı çözemiyordu (2026-11-23); çelişki yalnız gerçek tek döngülerde kalır.
+            var par = new Dictionary<int, int>(); var pty = new Dictionary<int, int>();
+            const int FIXED = -1;
+            (int root, int p) Find(int x)
+            {
+                if (!par.ContainsKey(x)) { par[x] = x; pty[x] = 0; }
+                int p = 0, r = x;
+                var path = new List<int>();
+                while (par[r] != r) { path.Add(r); r = par[r]; }
+                // yol sıkıştırma: her düğümün köke paritesi
+                for (int i = path.Count - 1; i >= 0; i--)
+                {
+                    int n = path[i];
+                    int up = par[n];
+                    pty[n] = pty[n] ^ (up == r ? 0 : pty[up]);
+                    par[n] = r;
+                }
+                p = x == r ? 0 : pty[x];
+                return (r, p);
+            }
+            bool Union(int a, int b, int c)
+            {
+                var (ra, pa) = Find(a); var (rb, pb) = Find(b);
+                if (ra == rb) return (pa ^ pb) == c;
+                if (rb == FIXED) { (ra, rb) = (rb, ra); (pa, pb) = (pb, pa); }
+                par[rb] = ra; pty[rb] = pa ^ pb ^ c;
+                return true;
+            }
+            int Var(int id) => Free(id) ? id : FIXED;
             if (graph.TryGetProperty("road_links", out var rl0))
                 foreach (var lk in rl0.EnumerateArray())
                 {
                     int e1 = lk[0].GetInt32(), e2 = lk[2].GetInt32();
-                    if (!edgeById.ContainsKey(e1) || !edgeById.ContainsKey(e2)) continue;
-                    bool S1 = (lk[1].GetString() == "a") ^ (NaturalFlip(e1) ^ extraFlip.Contains(e1));
-                    bool S2 = (lk[3].GetString() == "a") ^ (NaturalFlip(e2) ^ extraFlip.Contains(e2));
-                    if (S1 != S2) { fixedE.Add(e1); fixedE.Add(e2); continue; }
-                    if (Free(e2) && !fixedE.Contains(e2)) { if (!extraFlip.Add(e2)) extraFlip.Remove(e2); }
-                    else if (Free(e1) && !fixedE.Contains(e1)) { if (!extraFlip.Add(e1)) extraFlip.Remove(e1); }
-                    else { linkPlanFail++; continue; }
-                    fixedE.Add(e1); fixedE.Add(e2);
+                    if (!edgeById.ContainsKey(e1) || !edgeById.ContainsKey(e2) || e1 == e2) continue;
+                    int c = 1 ^ (lk[1].GetString() == "a" ? 1 : 0) ^ (NaturalFlip(e1) ? 1 : 0)
+                              ^ (lk[3].GetString() == "a" ? 1 : 0) ^ (NaturalFlip(e2) ? 1 : 0);
+                    int v1 = Var(e1), v2 = Var(e2);
+                    if (v1 == FIXED && v2 == FIXED) { if (c != 0) linkPlanFail++; continue; }
+                    if (!Union(v1, v2, c)) linkPlanFail++;
                 }
+            foreach (var id in par.Keys.ToList())
+            {
+                if (id == FIXED) continue;
+                var (r, p) = Find(id);
+                if (p == 1) extraFlip.Add(id);  // kök FIXED ise ona göre, değilse kök = 0 (düz) seçilir
+            }
         }
         var skippedPts = new List<double[]>();
         int roads = 0, segs = 0, skipped = 0, connected = 0, failed = 0, reversedAtOrigin = 0, originUnattached = 0;
@@ -1303,6 +1337,8 @@ internal static class Program
 
     static string PickModel(JsonElement b, JsonElement bl)
     {
+        // clear_buildings.py'nin seçtiği model (bilinen yer simgesi ya da küçük model yedeği) önceliklidir
+        if (bl.TryGetProperty("model", out var mo) && mo.ValueKind == JsonValueKind.String) return mo.GetString();
         var kind = bl.GetProperty("kind").GetString() ?? "yes";
         string key = kind switch
         {

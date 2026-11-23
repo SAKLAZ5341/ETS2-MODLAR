@@ -414,3 +414,16 @@ Paket `releases/saklaz_turkiye_map_0.2.0-dev_20261122_1414.scs`.
   erişilebilir. Kalan: Çayırova, Darıca, Gölcük, Karamürsel, Başiskele güçlü bağlı ağın dışında (C#'ın uygulayamadığı
   bağlantılar çıkarılınca). 10 kısa rampalı şehir kavşağında trafik log uyarısı (çökme değil).
 - Önizleme: harita/şirket hatası yok. Paket `releases/saklaz_turkiye_map_0.2.0-dev_20261123_1130.scs`.
+
+## 30. Bilinen yerler, bina yoğunluğu, kavşak rampaları – 2026-11-23 12:45
+- `fetch_kocaeli.py landmarks` (AVM, hastane, belediye, meydan) → `tools/geo/landmarks.py` süzer (muhtarlık, poliklinik,
+  giriş kayıtları, 150 m tekrarları): 104 yer. `clear_buildings.py` bunları önce yerleştirir (AVM shop_big_02_ro_blke,
+  hastane hotel_03_balt, belediye admin_01_lt_balt, meydan pavement_plaza1; sığmazsa yoldan uzağa kaydırma / yedek
+  shop_big_03_balt): 40 yerleşti. `place_signs` ad tabelası koyar (Gebze Center AVM, Kocaeli Şehir Hastanesi …).
+- Bina: küçük model yedeği + ilçe merkezine 700 m içinde etiketsiz sokak dolgusu + 14 m dolgu aralığı → 16.442 bina
+  (önce 9.500); editörde taşma yok (segment 15,4 bin; bağlantı eğrileri `thin_curve` ile seyreltildi).
+- `ramp_city_links`: boşta biten çıkış / boşta başlayan katılma rampası ≥15 km'lik şehir ağına bağlantı yolu + T ile
+  (erişim 260 m, prefab aralığı 40 m); parametre taraması en iyisi.
+- C# yön planı paritelim birleşim-bul; C# ret listesi yalnız yerleşim SCC'sinde kullanılır (onarımlar belirlenimci) →
+  derlemeler kararlı, C# sonrası doğrulama 33/33.
+- Sonuç: HQ/garaj 10 ilçe (Darıca, Çayırova hariç). Paket `releases/saklaz_turkiye_map_0.2.0-dev_20261123_1243.scs`.

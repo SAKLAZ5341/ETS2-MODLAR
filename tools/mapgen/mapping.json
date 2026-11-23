@@ -110,7 +110,23 @@
     ],
     "mosque_far": [
       "blke_0w002|default|default"
-    ]
+    ],
+    "lm_mall": [
+      "dlc_blke_54|var1,var2|default,company2",
+      "dlc_balt_479|vis|default"
+    ],
+    "lm_hospital": [
+      "dlc_balt_490|default|default",
+      "dlc_balt_479|vis|default"
+    ],
+    "lm_townhall": [
+      "dlc_balt_1|bricks,metal_plated,green|default",
+      "dlc_balt_479|vis|default"
+    ],
+    "lm_square": [
+      "250|default|sq_blk,hex,red"
+    ],
+    "_doc_lm": "Bilinen yerler (clear_buildings.py, fetch_kocaeli landmarks): AVM shop_big_02_ro_blke, hastane hotel_03_balt, belediye admin_01_lt_balt, meydan pavement_plaza1; yedek shop_big_03_balt. modelinfo ile doğrulandı."
   },
   "junctions": {
     "_doc": "prefabinfo ile doğrulandı. classes = .ppd düğüm sırasıyla kolun yol sınıfı (r1 kolu 18 m, r2 kolu 23,25 m).",

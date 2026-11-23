@@ -99,13 +99,20 @@ def main():
     ap.add_argument("--max-count", type=int, default=8000, help="toplam bina (editör yer tutucu sınırı)")
     ap.add_argument("--no-fill", action="store_true", help="OSM dışı dolgu binası üretme")
     ap.add_argument("--mid", action="store_true", help="ana cadde dışında az parçalı mid model (eski davranış)")
-    ap.add_argument("--fill-step", type=float, default=17.0, help="dolgu: sokak boyunca aralık (oyun m)")
+    ap.add_argument("--fill-step", type=float, default=14.0, help="dolgu: sokak boyunca aralık (oyun m)")
+    ap.add_argument("--center-fill", type=float, default=700.0,
+                    help="ilçe merkezine bu uzaklıktaki (oyun m) sokaklarda arazi etiketi olmasa da dolgu")
     a = ap.parse_args()
     cfg = json.loads((ROOT / "tools/mapgen/mapping.json").read_text(encoding="utf-8"))["buildings"]
     dims = {r["token"]: (float(r["dx"]), float(r["dz"])) for r in
             csv.DictReader(open(ROOT / "data/processed/game_defs/building_model_costs.csv", encoding="utf-8"))}
+    dims.setdefault("250", (40.0, 50.0))  # meydan döşemesi (pavement_plaza1, modelinfo)
 
     def model_of(b):
+        if b.get("models"):
+            return b["models"][b.get("alt", 0) % len(b["models"])].split("|")[0]
+        if b.get("alt_model"):
+            return b["alt_model"].split("|")[0]
         key = model_key(b)
         if not b.get("near_main") and key + "_far" in cfg:
             key += "_far"
@@ -145,6 +152,36 @@ def main():
             b["near_main"] = True  # yer tutucu yöntemiyle parça bütçesi yok: hepsi ayrıntılı (Türk/Balkan) model
     osm.sort(key=lambda b: (not b["near_main"], -b["area_real_m2"]))
 
+    # Bilinen yerler (fetch_kocaeli landmarks): AVM, hastane, belediye, meydan → kendi modeliyle, en önce
+    LM = {"mall": cfg.get("lm_mall"), "hospital": cfg.get("lm_hospital"), "townhall": cfg.get("lm_townhall"),
+          "square": cfg.get("lm_square")}
+    lms = []
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import landmarks as lmmod
+    all_lines = [LineString(e["pts"]) for e in g["edges"] if e["type"] in ("r1_city", "r1_city_narrow", "r2_divided")]
+    ltree = STRtree(all_lines)
+    for kind, name, ux_, uy_, lid in lmmod.load(lambda lo, la: T.transform(lo, la)):
+        if not LM.get(kind):
+            continue
+        x, z = gfun(ux_, uy_)
+        P = Point(x, z)
+        i = ltree.nearest(P)
+        ln = all_lines[i]
+        if ln.distance(P) > 120:
+            continue  # yol ağının dışında (il dışı)
+        Q = ln.interpolate(ln.project(P))
+        dx, dz = x - Q.x, z - Q.y
+        L = math.hypot(dx, dz) or 1
+        nx, nz = dx / L, dz / L  # yoldan binaya doğru
+        ang = math.degrees(math.atan2(-nx, -nz))  # ön yüz yola
+        for k in range(len(LM[kind])):
+            for push in (0, 15, 30, 45):
+                lms.append({"osm": -(10 ** 12) - lid * 10 - k * 4 - push // 15, "kind": kind, "models": LM[kind], "alt": k,
+                            "x": round(x + nx * push, 3), "z": round(z + nz * push, 3), "heading_deg": round(ang, 1),
+                            "len": 30, "wid": 30, "area_real_m2": 1e9, "near_main": True, "place": True,
+                            "landmark": lid, "name": name})
+    print(f"bilinen yer adayı: {len({b['landmark'] for b in lms})}")
+
     # dolgu adayları: yerleşim alanındaki sokak kenarları
     fill = []
     if not a.no_fill:
@@ -159,6 +196,7 @@ def main():
         atree = STRtree([p for p, _ in areas])
         aprep = [prep(p) for p, _ in areas]
         fid = -1
+        centers = [tuple(c["center"]) for c in g.get("cities", []) if c.get("center")]
         for e in g["edges"]:
             if e["type"] not in ("r1_city", "r1_city_narrow", "r2_divided"):
                 continue
@@ -177,8 +215,11 @@ def main():
                     pt = Point(cx, cz)
                     hit = [i for i in atree.query(pt) if aprep[i].contains(pt)]
                     if not hit:
-                        continue
-                    lu = areas[hit[0]][1]
+                        if not any(math.dist((cx, cz), c_) < a.center_fill for c_ in centers):
+                            continue
+                        lu = "residential"  # merkez çevresi: etiketsiz yerleşim
+                    else:
+                        lu = areas[hit[0]][1]
                     kind = {"industrial": "industrial", "commercial": "commercial", "retail": "commercial"}.get(lu)
                     h = int(abs(cx * 7.31 + cz * 3.17)) % 10
                     if kind is None:
@@ -197,25 +238,56 @@ def main():
     cell = 40.0
     grid = defaultdict(list)
     kept, off_road, overlap = [], 0, 0
-    for b in osm + fill:
-        if len(kept) >= a.max_count:
-            break
+    # küçük model yedeği: seçilen model sığmazsa en küçük iki ev modeli denenir (1:3 şehirde gerçek boyutlu modeller
+    # yola taştığı için OSM binalarının çoğu eleniyordu)
+    smalls = sorted(cfg.get("small_house", []), key=lambda m: (lambda d: d[0] * d[1])(dims.get(m.split("|")[0], (99, 99))))[:2]
+    done_lm = set()
+
+    def fits(b):
         fp = footprint(b)
         if any(roads[q].intersects(fp) for q in rtree.query(fp)):
-            off_road += 1
-            continue
+            return None, "road"
         x0, z0, x1, z1 = fp.bounds
         cells = [(i, j) for i in range(int(x0 // cell), int(x1 // cell) + 1) for j in range(int(z0 // cell), int(z1 // cell) + 1)]
         if any(o.intersects(fp) for c in cells for o in grid[c]):
-            overlap += 1
+            return None, "overlap"
+        return (fp, cells), None
+    for b in lms + osm + fill:
+        if len(kept) >= a.max_count:
+            break
+        if b.get("landmark") is not None and b["landmark"] in done_lm:
             continue
+        ok, why = fits(b)
+        if ok is None and b.get("landmark") is None and b.get("kind") not in ("industrial", "mosque"):
+            for m in smalls:
+                b["alt_model"] = m
+                ok, why2 = fits(b)
+                if ok is not None:
+                    break
+            if ok is None:
+                b.pop("alt_model", None)
+        if ok is None:
+            if why == "road":
+                off_road += 1
+            else:
+                overlap += 1
+            continue
+        fp, cells = ok
         for c in cells:
             grid[c].append(fp)
         kept.append(b)
+        if b.get("landmark") is not None:
+            done_lm.add(b["landmark"])
+    print(f"bilinen yer yerleşti: {len(done_lm)} / {len({b['landmark'] for b in lms})}")
     ids = {b["osm"] for b in kept}
     for b in ex["buildings"]:
         b["place"] = b["osm"] in ids
-    ex["buildings"] += [b for b in prov + fill if b["osm"] in ids]
+    for b in kept:  # seçilen yedek/simge modeli export'a yazılır
+        if b.get("models"):
+            b["model"] = b["models"][b.get("alt", 0) % len(b["models"])]
+        elif b.get("alt_model"):
+            b["model"] = b["alt_model"]
+    ex["buildings"] += [b for b in prov + fill + lms if b["osm"] in ids]
     (ROOT / "data/processed/map_export_s3_clear.json").write_text(json.dumps(ex, ensure_ascii=False), encoding="utf-8")
     print(f"bina: {len(kept)} (OSM {sum(1 for b in kept if not b.get('fill'))}, dolgu {sum(1 for b in kept if b.get('fill'))}); "
           f"aday OSM {len(osm)}, dolgu {len(fill)}; yola taşan {off_road}, çakışan {overlap}")

@@ -40,10 +40,14 @@ def save(name, data, q):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--only", nargs="*", default=None, help="yalnız bu katmanları yeniden indir")
+    ap.add_argument("--building-radius", type=int, default=2200, help="il geneli bina yarıçapı (m)")
     a = ap.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
 
     def need(n):
+        if a.only is not None:
+            return n in a.only
         return a.force or not (OUT / f"{n}.json").exists()
 
     if need("districts"):
@@ -83,6 +87,11 @@ out tags geom;""",
         "rail_coast": f"""[out:json][timeout:180][bbox:{bb}];
 (way["natural"="coastline"];way["railway"="rail"];);
 out tags geom;""",
+        # bilinen yerler: AVM, hastane, belediye, meydan, stadyum (simge modeli + ad tabelası)
+        "landmarks": f"""[out:json][timeout:300][bbox:{bb}];
+(nwr["shop"="mall"];nwr["amenity"="hospital"];nwr["amenity"="townhall"]["townhall:type"!="village"];
+ nwr["place"="square"];nwr["highway"="pedestrian"]["area"="yes"]["name"~"Meydan"];nwr["leisure"="stadium"];);
+out tags center;""",
     }
     for n, q in qs.items():
         if need(n):
@@ -106,7 +115,7 @@ out tags geom;""",
         save("streets", fetch_osm.overpass(q), q)
         time.sleep(5)
     if need("buildings"):
-        parts = "".join(f'way(around:1200,{la},{lo})["building"];'
+        parts = "".join(f'way(around:{a.building_radius},{la},{lo})["building"];'
                         for nm, (la, lo) in cen.items() if nm not in ("Gebze", "Darıca", "Çayırova", "Dilovası"))
         q = f"[out:json][timeout:600][maxsize:1073741824];({parts});out tags geom;"
         print("buildings ...")
