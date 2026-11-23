@@ -858,6 +858,15 @@ def main() -> None:
     _real = filter_links(edges, [list(l) for l in road_links], use_rejects=True)
     main_edges = largest_scc({"edges": edges, "junctions": chosen, "hw_junctions": hwj, "ramp_forks": forks,
                               "road_links": _real})
+    # Gerçek ağın dışında kalan büyük şehir ağları (Gebze çekirdeği, Çayırova, Darıca): gerçek ağdaki iki yönlü yola
+    # T kavşaklı bağlantı yolu. T prefab olduğu için uç birleştirmesi (C# reddi riski) yok (2026-11-23).
+    for _ in range(4):
+        if not add_connectors(edges, chosen + hwj + forks, _real, min_comp=3000.0, targets=main_edges):
+            break
+        edges, chosen = force_tees(edges, chosen, hwj + forks, road_links, a)
+        _real = filter_links(edges, [list(l) for l in road_links], use_rejects=True)
+        main_edges = largest_scc({"edges": edges, "junctions": chosen, "hw_junctions": hwj, "ramp_forks": forks,
+                                  "road_links": _real})
     print(f"ana bağlı ağ: {len(main_edges)}/{len(edges)} kenar, "
           f"%{100 * sum(e['len'] for e in edges if e['id'] in main_edges) / sum(e['len'] for e in edges):.1f} uzunluk")
     depots = place_depots(edges, chosen, S, a, links=road_links, allowed=main_edges)
@@ -1708,7 +1717,9 @@ def add_connectors(edges, junctions, links, min_comp=8000.0, max_len=600.0, clea
     if targets is not None:
         # kaynak grupları yalnız güçlü bağlı ağ DIŞINDAKİ kenarlar üzerinden (aksi halde Darıca ana yönsüz bileşenin
         # bir parçası sayılıp bağlantı başka yere konuyordu)
-        nt = {e["id"] for e in edges if e["id"] not in targets}
+        # yalnız iki yönlü şehir yolları: grup kendi içinde iki yönlü bağlı olsun (otoyol şeridi/rampa grubu yönlü
+        # tuzaklarla bölüyordu; tek noktadan bağlanan grup bütünüyle güçlü bağlı ağa girmiyordu)
+        nt = {e["id"] for e in edges if e["id"] not in targets and (e["type"] in CITY or e["type"] in R2)}
         sub_j = [{"arms": [a_ for a_ in j["arms"] if a_["edge"] in nt]} for j in junctions]
         comp = comp_finder(edges, sub_j, [l for l in links if l[0] in nt and l[2] in nt])
         clen = Counter()
@@ -1769,18 +1780,24 @@ def add_connectors(edges, junctions, links, min_comp=8000.0, max_len=600.0, clea
                     if d < 48 or d > max_len or (best and d >= best[0]):
                         continue
                     ux, uz = (p2[0] - p1[0]) / d, (p2[1] - p1[1]) / d
-                    if abs(ux * t1[0] + uz * t1[1]) > 0.85 or abs(ux * t2[0] + uz * t2[1]) > 0.85:
-                        DBG["tw dik değil"] += 1
-                        continue  # T için bağlantı yola yaklaşık dik olmalı
                     if not clear_of(p2) or not off_hw(p2):
                         DBG["tw p2 yakın"] += 1
                         continue
-                    seg = LineString([p1, p2])
+                    # iki uçta da yola dik çıkan eğri (T kolu dik); düz çizgi diklik şartında çok aday eleniyordu
+                    n1 = (-t1[1], t1[0]) if (-t1[1]) * ux + t1[0] * uz > 0 else (t1[1], -t1[0])
+                    n2 = (-t2[1], t2[0]) if (-t2[1]) * (-ux) + t2[0] * (-uz) > 0 else (t2[1], -t2[0])
+                    a_c = (p1[0] + n1[0] * 1.5, p1[1] + n1[1] * 1.5)
+                    b_c = (p2[0] + n2[0] * 1.5, p2[1] + n2[1] * 1.5)
+                    curve = bezier_pts(a_c, n1, b_c, (-n2[0], -n2[1]))
+                    if not smooth_enough(curve, n1, (-n2[0], -n2[1]), 40.0):
+                        DBG["tw dik değil"] += 1
+                        continue
+                    seg = LineString(curve)
                     if any(allines[q].distance(Point(p1)) > 0.5 and allines[q].distance(Point(p2)) > 0.5
                            and allines[q].intersects(seg) for q in atree.query(seg)):
                         DBG["tw kesişiyor"] += 1
                         continue
-                    best = (d, p1, p2, ux, uz)
+                    best = (d, p1, p2, ux, uz, curve)
         if not best:
             # ikinci seçenek: otoyol/bölünmüş yol şeridine (sağ yandan) çıkış/katılma ile (force_hw_tees bağlar)
             lanes = [e for e in edges if e["type"] == "hw3_oneway" and not e.get("reverse") and e["len"] > 120
@@ -1827,16 +1844,19 @@ def add_connectors(edges, junctions, links, min_comp=8000.0, max_len=600.0, clea
         if not best:
             print(f"  bağlantı yolu bulunamadı: bileşen {L / 1000:.1f} km {dict(DBG)}")
             continue
-        d, p1, p2, ux, uz = best
+        d, p1, p2, ux, uz = best[:5]
         a_ = (p1[0] + ux * 1.5, p1[1] + uz * 1.5)
         b_ = (p2[0] - ux * 1.5, p2[1] - uz * 1.5)
         n0 = max(max(e["a"], e["b"]) for e in edges) + 1
-        pts = [list(a_)]
-        nseg = max(1, int((d - 3) // 60))
-        for i in range(1, nseg):
-            t = i / nseg
-            pts.append([a_[0] + (b_[0] - a_[0]) * t, a_[1] + (b_[1] - a_[1]) * t])
-        pts.append(list(b_))
+        if len(best) > 5:
+            pts = [list(q) for q in thin_curve(best[5])]
+        else:
+            pts = [list(a_)]
+            nseg = max(1, int((d - 3) // 60))
+            for i in range(1, nseg):
+                t = i / nseg
+                pts.append([a_[0] + (b_[0] - a_[0]) * t, a_[1] + (b_[1] - a_[1]) * t])
+            pts.append(list(b_))
         edges.append({"id": len(edges), "osm": 0, "hw": "tertiary", "type": "r1_city", "prio": 6, "oneway": False,
                       "reverse": False, "a": n0, "b": n0 + 1, "pts": pts, "len": round(d - 3.0, 1), "connector": True})
         mpts += [(q_, t_, len(edges) - 1) for q_, t_ in []]

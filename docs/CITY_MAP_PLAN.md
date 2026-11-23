@@ -427,3 +427,12 @@ Paket `releases/saklaz_turkiye_map_0.2.0-dev_20261122_1414.scs`.
 - C# yön planı paritelim birleşim-bul; C# ret listesi yalnız yerleşim SCC'sinde kullanılır (onarımlar belirlenimci) →
   derlemeler kararlı, C# sonrası doğrulama 33/33.
 - Sonuç: HQ/garaj 10 ilçe (Darıca, Çayırova hariç). Paket `releases/saklaz_turkiye_map_0.2.0-dev_20261123_1243.scs`.
+
+## 31. Darıca/Çayırova denemesi – 2026-11-23 14:15
+- Gerçek ağa (C# retleri düşülmüş SCC) T kavşaklı, iki ucu yola dik Bezier bağlantı yolları (`add_connectors` targets,
+  yalnız iki yönlü şehir yolu grupları). Küçük gruplar bağlandı; HQ 10 ilçe, C# sonrası 32/32.
+- Teşhis: Gebze merkezi/Çayırova/Darıca tek kopuk grup değil; yoğun sokak ağında (1:3) kavşak prefabı sığmadığı için
+  çekirdek onlarca küçük parçaya bölünüyor ve D-100/TEM/rampalarla çevrili (her bağlantı adayı başka yolu kesiyor).
+  Çözüm çekirdeğin yeniden tasarımı: bu ilçeler için daha büyük ölçek ya da ana cadde iskeleti.
+- Denendi, geri alındı: C# retlerini onarım döngüsünde kullanmak (7 ilçeye düşürdü); birikimli ret listesi.
+- Paket `releases/saklaz_turkiye_map_0.2.0-dev_20261123_1415.scs` (zaman damgası paketten).
