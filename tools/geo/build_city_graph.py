@@ -120,6 +120,7 @@ def main() -> None:
     ap.add_argument("--pick-len", type=float, default=0.0, help="prefabı engelleyen ana yol kolu bu uzunluktan kısaysa kaldırılır")
     ap.add_argument("--ramp-reach", type=float, default=260.0, help="rampa-şehir bağlantısı en uzun (oyun m; 0=kapalı)")
     ap.add_argument("--ramp-min-comp", type=float, default=15000.0, help="rampa yalnız bu uzunluktan büyük şehir ağına")
+    ap.add_argument("--final-tol", type=float, default=2.0, help="son sadeleştirme tolerans çarpanı (0 = kapalı)")
     ap.add_argument("--max-angle", type=float, default=65.0, help="kavşak prefabı kol açı hatası üst sınırı (derece; C# mapping 70)")
     ap.add_argument("--connect-iters", type=int, default=12, help="bağlanamayan kesişimlerde sokak kaldırma turu")
     ap.add_argument("--tertiary-radius", type=float, default=3000.0, help="il geneli tertiary: merkeze en çok (gerçek m)")
@@ -875,6 +876,7 @@ def main() -> None:
     cities = assign_cities(depots, edges, S)
     garages = place_garages(edges, chosen, depots, S, links=road_links, allowed=main_edges, cities=cities)
     signs = place_signs(edges, chosen + hwj + forks + depots + garages, cities, S, main_edges)
+    final_simplify(edges, a.final_tol)
     out = {"meta": meta, "edges": edges, "junctions": chosen, "hw_junctions": hwj, "ramp_forks": forks, "signs": signs,
            "depots": depots, "garages": garages,
            "cities": cities, "road_links": road_links, "city_areas": city_grid(edges, S)}
@@ -2545,6 +2547,31 @@ def fix_city_ramp_arms(edges, chosen, others, links, cut_at=36.0):  # C# prefab 
         for i, j in enumerate(chosen):
             j["id"] = i
     print(f"şehir kavşağı rampa kolu: {made} bölündü, {conv} iki yönlüye çevrildi, {left} kısa kaldı")
+
+
+def final_simplify(edges, scale=1.0):
+    """Editör bütçesi (≈ 3×segment + bina ≲ 65 bin): bütün bağlantı/yerleşim kararlarından SONRA ara noktalar seyreltilir.
+    Uçlar ve ilk/son parça korunur (kavşak kol yönü, uç birleşim yönü, depo/garaj düğümleri aynı kalır); bağlantı
+    yapısı değişmez (2026-11-23: segmentlerin ~3 bini 5 m örneklenmiş bağlantı eğrileriydi)."""
+    before = sum(len(e["pts"]) - 1 for e in edges)
+    for e in edges:
+        ps = e["pts"]
+        if len(ps) <= 4:
+            continue
+        if e.get("connector") or e.get("uturn") or e.get("outer") is None:
+            tol = 1.5
+        elif e.get("rural"):
+            tol = 12.0
+        elif e.get("outer"):
+            tol = 6.0
+        elif e["type"].startswith("hw") or e["type"] == "ramp_1lane":
+            tol = 2.0
+        else:
+            tol = 2.5
+        mid = [tuple(c) for c in LineString(ps[1:-1]).simplify(tol * scale).coords]
+        e["pts"] = [ps[0]] + [list(c) for c in mid] + [ps[-1]]
+    after = sum(len(e["pts"]) - 1 for e in edges)
+    print(f"son sadeleştirme: segment {before} -> {after}")
 
 
 def heal_links(edges, junctions, links):

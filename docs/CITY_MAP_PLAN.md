@@ -450,3 +450,9 @@ Paket `releases/saklaz_turkiye_map_0.2.0-dev_20261122_1414.scs`.
   tamamı birlikteyken; ikiye bölünmüş halde açılıyordu; neden bulunamadı). `build_ground.py --no-core`: büyütülen
   bölge 12 ilçe merkezi zemini + il geneli hücreleriyle (1.446 öğe). Editör/önizleme hatasız.
 - Bina 11.630 (segment 17,4 bin: editör bütçesi). Paket `releases/saklaz_turkiye_map_0.2.0-dev_<tarih>.scs`.
+
+## 33. Bina sayısı – 2026-11-23 17:05
+- `final_simplify` (`--final-tol 2`): bütün bağlantı/yerleşim kararlarından sonra ara noktalar seyreltilir (uçlar ve
+  ilk/son parça korunur; bağlantı yapısı aynı). Segment 18,3 bin → 15,5 bin (C#).
+- Bina 16.252 (çoğu gerçek OSM binası; büyütülen çekirdekte daha çok sığıyor). Editör taşmasız; 12 ilçe, C# sonrası
+  39/39. Önizleme: yalnız 1 trafik uyarısı.
