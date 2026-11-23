@@ -60,7 +60,44 @@ R2 = {"r2_divided"}
 # kalıp ağ kopuyordu (yeni profilde "No valid offers found for player's HQ city" → oyun kapanıyordu, 2026-11-22)
 cls = lambda t: "r2" if t in R2 else ("r1" if t in CITY or t == "ramp_1lane" else None)
 # izin verilen (r1 sayısı, r2 sayısı) desenleri -> prefab var
-PATTERNS = {(3, 0), (2, 1), (1, 2), (0, 3), (4, 0), (0, 4)}
+PATTERNS = {(3, 0), (2, 1), (1, 2), (0, 3), (4, 0), (0, 4), (2, 2)}
+
+
+def prefab_angle_error(dirs, cl, lens=None):
+    """Kavşak prefabına (T: karşılıklı iki kol + dik gövde; X: dört dik kol; prefabinfo ile doğrulandı) en iyi
+    döndürmede kolların en büyük açı hatası (derece). C# aynı ölçütle (max_angle_error_deg) reddediyordu; reddedilen
+    düğümler sonraki derlemede dışlanıyordu (junction_excluded.json). Artık Python'da önceden hesaplanır."""
+    ang = [math.degrees(math.atan2(d[1], d[0])) for d in dirs]
+    n = len(ang)
+    shapes = []
+    if n == 4:
+        perms = [p for p in __import__("itertools").permutations(range(4)) if p[0] == 0]
+        if (cl.count("r1"), cl.count("r2")) == (2, 2):  # r2 × r1: karşılıklı kollar aynı sınıf
+            perms = [p for p in perms if cl[p[0]] == cl[p[2]] and cl[p[1]] == cl[p[3]]]
+        shapes = [("x", [0, 90, 180, 270], perms)]
+    else:
+        perms = []
+        for st in range(3):
+            if (cl.count("r1"), cl.count("r2")) in ((2, 1), (1, 2)):
+                if cl.count(cl[st]) != 1:
+                    continue  # gövde azınlık sınıfı olmalı
+            th = [i for i in range(3) if i != st]
+            perms.append(tuple(th + [st]))
+        shapes = [("t", [0, 180, 90], perms)]  # iki geçiş + gövde
+        if cl.count("r1") == 3:  # Y (ger_r1_x_r1_y_narrow[_mirrored]): dal 60°, dal kolu 25,4 m → kol ≥ 34 m
+            yp = [pm for pm in perms if lens is None or lens[pm[2]] >= 34]
+            shapes += [("y", [0, 180, 60], yp), ("y", [0, 180, 120], yp)]
+    best, bshape = 1e9, None
+    for shape, slots, pms in shapes:
+        for pm in pms:  # pm[k] = slot k'ya giden kol
+            res = [(ang[pm[k]] - slots[k]) for k in range(n)]
+            sx = sum(math.cos(math.radians(r)) for r in res)
+            sz = sum(math.sin(math.radians(r)) for r in res)
+            rot = math.degrees(math.atan2(sz, sx))
+            err = max(abs((r - rot + 180) % 360 - 180) for r in res)
+            if err < best - (8 if shape == "y" else 0):  # Y yalnız belirgin biçimde daha iyiyse
+                best, bshape = min(err, best), shape
+    return (best, bshape) if lens is not None else best
 
 
 def main() -> None:
@@ -78,6 +115,7 @@ def main() -> None:
     ap.add_argument("--no-collapse", action="store_true", help="bölünmüş caddeleri tek hatta indirgeme")
     ap.add_argument("--core-only", action="store_true", help="yalnız Gebze/Darıca/Çayırova/Dilovası çekirdeği")
     ap.add_argument("--cluster-len", type=float, default=22.0, help="bu uzunluktan kısa kesişim-kesişim parçası daraltılır (oyun m)")
+    ap.add_argument("--max-angle", type=float, default=65.0, help="kavşak prefabı kol açı hatası üst sınırı (derece; C# mapping 70)")
     ap.add_argument("--connect-iters", type=int, default=12, help="bağlanamayan kesişimlerde sokak kaldırma turu")
     ap.add_argument("--tertiary-radius", type=float, default=3000.0, help="il geneli tertiary: merkeze en çok (gerçek m)")
     ap.add_argument("--no-villages", dest="villages", action="store_false", help="merkezden uzak köy yollarını alma")
@@ -244,7 +282,7 @@ def main() -> None:
     # 2c) Kesişim kümeleme: iki kesişimi (derece ≥ 3) birbirine bağlayan kısa parça (< cluster_len) daraltılır;
     #     iki yakın T tek X olur ve kavşak prefabı (kol 18 m) sığar. Aksi halde ikisi de prefabsız kalıyor,
     #     ana yollar kopuyordu (yeni profilde HQ şehirleri ve GPS, 2026-11-22). Tur başına her düğüm bir kez.
-    for _ in range(3):
+    for _ in range(6):
         deg = Counter()
         for ed in edges:
             deg[ed["a"]] += 1
@@ -259,8 +297,11 @@ def main() -> None:
                 continue
             if deg[ed["a"]] < 3 or deg[ed["b"]] < 3 or ed["a"] in touched or ed["b"] in touched:
                 continue
-            if ed["type"] in ("hw3_oneway", "hw3_divided") or ed["oneway"]:
-                continue  # otoyol şeritleri ve tek yönlü yollar korunur
+            if ed["type"] not in CITY and ed["type"] not in R2 and ed["type"] != "service":
+                continue  # otoyol şeritleri ve rampalar korunur (tek yönlü şehir yolu kısa parçaları daraltılır:
+                #           "kısa kol" kesişimlerinin ~%70'i 18 m'den kısa tek yönlü parçaydı, 2026-11-23)
+            if deg[ed["a"]] + deg[ed["b"]] - 2 > 4:
+                continue  # 5+ kollu düğüm prefab alamaz
             pa, pb = pos[ed["a"]], pos[ed["b"]]
             pos[ed["a"]] = (round((pa[0] + pb[0]) / 2, 3), round((pa[1] + pb[1]) / 2, 3))
             merged_into[ed["b"]] = ed["a"]
@@ -292,7 +333,7 @@ def main() -> None:
     # Bağlantı döngüsü: ETS2'de kesişim ancak kavşak prefabıyla bağlanır. Prefab alamayan kesişimlerde en düşük
     # öncelikli ara sokak kolu (servis > konut > adsız) kaldırılır; ana yollara dokunulmaz. Kalan her kesişim ya
     # prefablı ya da düz geçiş olur → yol ağı bağlı (yeni profilde "No valid offers ... HQ city" çökmesi, 2026-11-22).
-    removed_total = 0
+    removed_total, main_rm = 0, [0]
     for _it in range(a.connect_iters + 1):
         # kısa çıkmaz ara sokakları önce buda (kesişimi gereksiz yere "kısa kol" yapıyorlar)
         while True:
@@ -339,10 +380,12 @@ def main() -> None:
                 far = cur["b"] if cend == "a" else cur["a"]
                 nxt = inc.get(far, [])
                 if len(nxt) != 2 or far == k or L >= 200:
+                    STOP[0] = "uç" if len(nxt) == 1 else ("kesişim" if len(nxt) > 2 else "uzun/halka")
                     return L, chain, pts
                 (e2, en2) = nxt[0] if nxt[0][0]["id"] != cur["id"] else nxt[1]
                 if e2["id"] == cur["id"] or e2["id"] in chain or cls(e2["type"]) != cls(cur["type"]) \
                         or cls(e2["type"]) is None or e2["oneway"] != cur["oneway"]:
+                    STOP[0] = "tür değişimi " + cur["type"] + ">" + e2["type"] + ("" if e2["oneway"] == cur["oneway"] else " (tek yön)")
                     return L, chain, pts
                 chain.append(e2["id"])
                 pts += (e2["pts"] if en2 == "a" else e2["pts"][::-1])[1:]
@@ -360,44 +403,79 @@ def main() -> None:
             return [round(dx / L, 4), round(dz / L, 4)]
 
         cand = []
+        STOP, SHORT, SHORT2, PICK = ["?"], Counter(), Counter(), {}
         JWHY = Counter()
         blocked = set()
         for k, lst in inc.items():
             if len(lst) < 3:
                 continue
             blocked.add(k)  # seçilirse aşağıda çıkarılır
+            # prefab alamayan kesişimde kaldırılacak ana yol kolu önerisi (en önemsiz, en kısa): prefabsız düğümde o kol
+            # zaten kopuk kalıyordu; kaldırınca kalan kollar prefabla bağlanır (2026-11-23)
+            low = sorted((ed for ed, _ in lst if ed["type"] in CITY or ed["type"] in R2 or ed["type"] == "service"),
+                         key=lambda e: (-e["prio"], e["len"]))
             if len(lst) > 4:
                 JWHY["5+ kol"] += 1
+                if low:
+                    PICK[k] = low[0]["id"]
                 continue
             if k in excluded:
                 JWHY["reddedilmiş"] += 1
+                if low and len(lst) == 4:
+                    PICK[k] = low[0]["id"]
                 continue
             cl = [cls(ed["type"]) for ed, _ in lst]
+            if len(lst) == 3 and all(ed["type"] == "ramp_1lane" and ed["oneway"] for ed, _ in lst):
+                JWHY["rampa çatalı (3c)"] += 1
+                continue  # tek yönlü rampa ayrılma/birleşmesi: Y prefabı (3c)
             if None in cl or (cl.count("r1"), cl.count("r2")) not in PATTERNS:
                 JWHY["desen " + "+".join(sorted(LOOK_GROUP.get(ed["type"], ed["type"]) for ed, _ in lst))] += 1
                 continue
             if any(ed["a"] == ed["b"] for ed, _ in lst):
                 JWHY["halka"] += 1
                 continue
-            chains = [arm_chain(ed, end, k) for ed, end in lst]
+            chains, stops = [], []
+            for ed, end in lst:
+                STOP[0] = "?"
+                chains.append(arm_chain(ed, end, k))
+                stops.append(STOP[0])
             if min(c[0] for c in chains) < a.min_arm:
                 JWHY["kısa kol"] += 1
+                i_ = min(range(len(chains)), key=lambda i: chains[i][0])
+                e_ = lst[i_][0]
+                if e_["type"] in CITY or e_["type"] in R2 or e_["type"] == "service":
+                    PICK[k] = e_["id"]
+                SHORT[stops[i_] + (" ana" if all(ed["prio"] < 7 for ed, _ in lst) else "")] += 1
+                if stops[i_] == "kesişim":
+                    e_ = lst[i_][0]
+                    SHORT2[(int(chains[i_][0] // 6) * 6, e_["oneway"], len(chains[i_][1]))] += 1
                 continue
             ids = [x for c in chains for x in c[1]]
             if len(ids) != len(set(ids)):  # iki kol aynı zincir (halka)
                 JWHY["kol halkası"] += 1
                 continue
             dirs = [chain_dir(c[2]) for c in chains]
-            if any(dirs[i][0] * dirs[j][0] + dirs[i][1] * dirs[j][1] > 0.9 for i in range(len(dirs)) for j in range(i)):
+            perr, pshape = prefab_angle_error(dirs, cl, [c_[0] for c_ in chains])
+            if perr > a.max_angle:
+                JWHY["açı tutmuyor"] += 1
+                if low and len(lst) == 4:
+                    PICK[k] = low[0]["id"]
+                continue
+            close = [(i, j) for i in range(len(dirs)) for j in range(i) if dirs[i][0] * dirs[j][0] + dirs[i][1] * dirs[j][1] > 0.9]
+            if close:
                 JWHY["dar açı"] += 1
+                i, j = close[0]
+                pk = [lst[x][0] for x in (i, j) if lst[x][0]["type"] in CITY or lst[x][0]["type"] in R2]
+                if pk:
+                    PICK[k] = max(pk, key=lambda e: (e["prio"], -e["len"]))["id"]
                 continue  # iki kol neredeyse üst üste (prefab açısı tutmaz)
             c = edges[lst[0][0]["id"]]["pts"][0] if lst[0][1] == "a" else lst[0][0]["pts"][-1]
-            cand.append((min(c_[0] for c_ in chains), k, c, lst, chains, dirs))
+            cand.append((min(c_[0] for c_ in chains), k, c, lst, chains, dirs, pshape))
         cand.sort(key=lambda x: -x[0])  # en uzun kollu (en rahat) kavşaklar önce
         chosen, grid = [], defaultdict(list)
         G = a.min_junction_gap
         used_edges = Counter()
-        for _, k, c, lst, chains, dirs in cand:
+        for _, k, c, lst, chains, dirs, pshape in cand:
             key = (int(c[0] // G), int(c[1] // G))
             if any(math.dist(c, q) < G for dx in (-1, 0, 1) for dz in (-1, 0, 1) for q in grid[(key[0] + dx, key[1] + dz)]):
                 JWHY["başka kavşağa yakın"] += 1
@@ -412,7 +490,7 @@ def main() -> None:
                 for x in ch[1]:
                     used_edges[x] += 1
             blocked.discard(k)
-            chosen.append({"id": len(chosen), "node": k, "x": c[0], "z": c[1], "arms":
+            chosen.append({"id": len(chosen), "node": k, "x": c[0], "z": c[1], "shape": pshape, "arms":
                            [{"edge": ed["id"], "end": end, "cls": cls(ed["type"]), "dir": d}
                             for (ed, end), d in zip(lst, dirs)]})
 
@@ -423,6 +501,9 @@ def main() -> None:
             minor = [ed for ed, _ in inc[k] if ed["prio"] >= 7 and ed["id"] not in rm]
             if minor:
                 rm.add(max(minor, key=lambda e: (e["prio"], -e["len"]))["id"])
+            elif k in PICK and _it >= 2 and edges[PICK[k]]["len"] < 150:
+                rm.add(PICK[k])
+                main_rm[0] += 1
         print(f"  bağlantı turu {_it + 1}: kavşak {len(chosen)}, prefabsız kesişim {len(blocked)}, kaldırılan sokak {len(rm)}")
         if not rm:
             break
@@ -430,8 +511,10 @@ def main() -> None:
         for i, ed in enumerate(edges):
             ed["id"] = i
         removed_total += len(rm)
-    print(f"bağlantı için kaldırılan ara sokak parçası: {removed_total}")
+    print(f"bağlantı için kaldırılan ara sokak parçası: {removed_total} (ana yol kolu {main_rm[0]})")
     print(f"kavşak: {len(chosen)} prefab; prefabsız kesişim nedenleri: {dict(JWHY.most_common(14))}")
+    print(f"  kısa kol: neden {dict(SHORT.most_common(12))}")
+    print(f"  kısa kol kesişim (uzunluk, tek yön, parça): {sorted(SHORT2.items())}")
 
     # 3b) Otoyol ayrılma/katılma noktaları (tek yönlü şerit + tek yönlü rampa, sağdan trafik)
     hwj, hgrid = [], defaultdict(list)
@@ -458,28 +541,71 @@ def main() -> None:
             continue
         tx, tz = tx / tl, tz / tl
         # rampanın ~30 m ilerideki noktasının şeride göre yanal sapması (sağ = (-tz, tx); +Z güney)
+        # (köşe noktası yerine rampa boyunca ara değerlenmiş noktalar: yonca rampası ilk köşede sola dönmüş
+        #  görünüp "solda" sayılıyordu, 2026-11-23)
         rp = er["pts"] if rend == "a" else er["pts"][::-1]
-        acc, far = 0.0, rp[-1]
-        for p_, q_ in zip(rp, rp[1:]):
-            acc += math.dist(p_, q_)
-            if acc >= 30:
-                far = q_
+
+        def at_len(L_):
+            acc = 0.0
+            for p_, q_ in zip(rp, rp[1:]):
+                d_ = math.dist(p_, q_)
+                if acc + d_ >= L_:
+                    t_ = (L_ - acc) / (d_ or 1)
+                    return (p_[0] + (q_[0] - p_[0]) * t_, p_[1] + (q_[1] - p_[1]) * t_)
+                acc += d_
+            return rp[-1]
+        lat = 0.0
+        for L_ in (8, 14, 20, 30, 45, 60):
+            q_ = at_len(L_)
+            lat = (q_[0] - rp[0][0]) * (-tz) + (q_[1] - rp[0][1]) * tx
+            if abs(lat) > 0.6:
                 break
-        lat = (far[0] - rp[0][0]) * (-tz) + (far[1] - rp[0][1]) * tx
-        if lat <= 1.0:  # rampa sağda değil
-            why["rampa solda/düz"] += 1
+        if lat <= 0.3:  # rampa sağda değil
+            why["rampa solda" if lat < -0.3 else "rampa düz"] += 1
             continue
         # prefab (40 m) çıkışta gelen şeridin, katılmada giden şeridin üstüne oturur
         long_e, short_e = (ein, eout) if kind == "exit" else (eout, ein)
-        if long_e["len"] < a.hw_prefab_len + 4 or short_e["len"] < 8 or er["len"] < 20:
+        # kenar uzunluğu yerine 2 dereceli düğümlerden geçen şerit zinciri (4c'de tek yola birleşiyor): OSM köprü/
+        # tünel bölmeleri yüzünden 137 çıkış "kısa kenar" diye eleniyordu (2026-11-23)
+        def hw_chain(ed, end):
+            L, cur, cend, seen_ = 0.0, ed, end, {ed["id"]}
+            while L < 200:
+                L += cur["len"]
+                far = cur["a"] if cend == "b" else cur["b"]
+                nx = [(e2, en2) for e2, en2 in inc.get(far, []) if e2["id"] != cur["id"]]
+                if len(inc.get(far, [])) != 2 or len(nx) != 1 or nx[0][0]["type"] != cur["type"] or nx[0][0]["id"] in seen_:
+                    break
+                cur, cend = nx[0][0], ("b" if nx[0][1] == "b" else "a")
+                seen_.add(cur["id"])
+            return L
+        if hw_chain(long_e, "b" if long_e is ein else "a") < a.hw_prefab_len + 4 or short_e["len"] < 8 or er["len"] < 20:
             why[f"kısa kenar ({'uzun' if long_e['len'] < a.hw_prefab_len + 10 else 'kısa/rampa'})"] += 1
             continue
         c = ein["pts"][-1]
-        key = (int(c[0] // HG), int(c[1] // HG))
-        if any(math.dist(c, q) < HG for dx in (-1, 0, 1) for dz in (-1, 0, 1) for q in hgrid[(key[0] + dx, key[1] + dz)]):
+        key = (int(c[0] // 100), int(c[1] // 100))
+        # prefab izdüşümü şerit boyunca: çıkış [-40, 0], katılma [0, +40] (çapa = ayrılma/katılma noktası). Aynı şeritteki
+        # prefablar yalnız izdüşümleri çakışırsa çatışır (yonca kavşağında çıkış ardından katılma 20-40 m arayla
+        # meşru; eski 50 m çember kuralı bunları eliyordu, 2026-11-23)
+        PL = a.hw_prefab_len
+        lo, hi = (-PL, 0.0) if kind == "exit" else (0.0, PL)
+        clash = False
+        for dx in (-1, 0, 1):
+            for dz in (-1, 0, 1):
+                for (q, qt, qlo, qhi) in hgrid[(key[0] + dx, key[1] + dz)]:
+                    dd = math.dist(c, q)
+                    if dd > 2 * PL + 10:
+                        continue
+                    same = tx * qt[0] + tz * qt[1] > 0.7 and abs((c[0] - q[0]) * qt[1] - (c[1] - q[1]) * qt[0]) < 6
+                    if same:
+                        sx = (c[0] - q[0]) * qt[0] + (c[1] - q[1]) * qt[1]
+                        if max(sx + lo, qlo) < min(sx + hi, qhi) + 4:
+                            clash = True
+                    elif dd < 12:
+                        clash = True
+        if clash:
             why["başka prefaba yakın"] += 1
             continue
-        hgrid[key].append(c)
+        hgrid[key].append((c, (tx, tz), lo, hi))
         hwj.append({"id": len(hwj), "node": k, "x": c[0], "z": c[1], "kind": kind,
                     "travel": [round(tx, 4), round(tz, 4)],
                     "arms": [{"edge": ein["id"], "end": "b", "role": "in"},
@@ -488,9 +614,57 @@ def main() -> None:
     print(f"otoyol ayrılma/katılma: {sum(1 for h in hwj if h['kind'] == 'exit')} çıkış, "
           f"{sum(1 for h in hwj if h['kind'] == 'merge')} katılma; elenen: {dict(why)}")
 
+    # 3c) Rampa çatalları: tek yönlü tek şeritli rampanın ikiye ayrılması / iki rampanın birleşmesi. Simetrik Y prefabı
+    #     (exit_road_joint_short[_mirrored]_tmpl, 17 m, kollar ±30°; ppdnav ile doğrulandı). Önceden şehir kavşağı
+    #     sayılıyor, rampa otoyol prefabına bağlıysa atılıyordu: otoyolun iki yönü ve ilçeler ayrı ağlarda kalıyordu
+    #     ("ramp orta + ramp uç" kopuklukları, 2026-11-23).
+    forks, fwhy = [], Counter()
+    used_nodes = {j["node"] for j in chosen} | {h["node"] for h in hwj}
+    for k, lst in inc.items():
+        if len(lst) != 3 or k in used_nodes:
+            continue
+        if not all(ed["type"] == "ramp_1lane" and ed["oneway"] and not ed["reverse"] for ed, _ in lst):
+            continue
+        if any(ed["a"] == ed["b"] for ed, _ in lst):
+            continue
+        ins = [(ed, end) for ed, end in lst if end == "b"]
+        outs = [(ed, end) for ed, end in lst if end == "a"]
+        if (len(ins), len(outs)) not in ((1, 2), (2, 1)):
+            fwhy["yön"] += 1
+            continue
+        kind = "split" if len(ins) == 1 else "join"
+        if any(ed["len"] < 15 for ed, _ in lst):
+            fwhy["kısa kol"] += 1
+            continue
+        if kind == "split":
+            d0 = arm_dir(ins[0][0], "b")
+            tx, tz = -d0[0], -d0[1]
+            br = [(ed, end, arm_dir(ed, end)) for ed, end in outs]
+            ang = [math.degrees(math.acos(max(-1, min(1, d[0] * tx + d[1] * tz)))) for _, _, d in br]
+        else:
+            tx, tz = arm_dir(outs[0][0], "a")
+            br = [(ed, end, arm_dir(ed, end)) for ed, end in ins]
+            ang = [math.degrees(math.acos(max(-1, min(1, -(d[0] * tx + d[1] * tz))))) for _, _, d in br]
+        if max(ang) > 75:
+            fwhy["açı"] += 1
+            continue
+        # sağ = (-tz, tx); ayrılmada dal yönü, birleşmede geliş yönünün tersi (akış yönü) yanal sapması
+        sgn = 1 if kind == "split" else -1
+        lat = [sgn * (d[0] * (-tz) + d[1] * tx) for _, _, d in br]
+        left, right = (br[0], br[1]) if lat[0] < lat[1] else (br[1], br[0])
+        c = lst[0][0]["pts"][0] if lst[0][1] == "a" else lst[0][0]["pts"][-1]
+        trunk = ins[0] if kind == "split" else outs[0]
+        forks.append({"id": len(forks), "node": k, "x": c[0], "z": c[1], "kind": kind,
+                      "travel": [round(tx, 4), round(tz, 4)],
+                      "arms": [{"edge": trunk[0]["id"], "end": trunk[1], "role": "trunk"},
+                               {"edge": left[0]["id"], "end": left[1], "role": "left"},
+                               {"edge": right[0]["id"], "end": right[1], "role": "right"}]})
+    print(f"rampa çatalı: {sum(1 for f_ in forks if f_['kind'] == 'split')} ayrılma, "
+          f"{sum(1 for f_ in forks if f_['kind'] == 'join')} birleşme; elenen: {dict(fwhy)}")
+
     # 4) Prefab konmayan kesişimlerde parçaları aynı OSM yolu boyunca yeniden birleştir
     #    (editör öğe sayısı sınırı: ~17 bin öğe üstünde render taşması).
-    jnodes = {j["node"] for j in chosen} | {h["node"] for h in hwj}
+    jnodes = {j["node"] for j in chosen} | {h["node"] for h in hwj} | {f_["node"] for f_ in forks}
     remap, merged = {}, []
     cur = None
     for ed in edges:  # aynı yolun parçaları ardışık üretildi
@@ -508,7 +682,7 @@ def main() -> None:
             remap[(ed["id"], "b")] = cur
     for i, m in enumerate(merged):
         m["id"] = i
-    for j in chosen + hwj:
+    for j in chosen + hwj + forks:
         for arm in j["arms"]:
             m = remap[(arm["edge"], arm["end"])]
             arm["edge"] = m["id"]
@@ -533,11 +707,11 @@ def main() -> None:
         for ed in edges:
             deg[ed["a"]] += 1
             deg[ed["b"]] += 1
-        armed = {arm["edge"] for j in chosen + hwj for arm in j["arms"]}
+        armed = {arm["edge"] for j in chosen + hwj + forks for arm in j["arms"]}
         keep = [ed for ed in edges if not (ed["type"] in ("r1_city_narrow", "service") and ed["id"] not in armed
                                             and (deg[ed["a"]] == 1 or deg[ed["b"]] == 1) and ed["len"] < a.drop_deadend_len)]
         idmap = {ed["id"]: i for i, ed in enumerate(keep)}
-        for j in chosen + hwj:
+        for j in chosen + hwj + forks:
             for arm in j["arms"]:
                 arm["edge"] = idmap[arm["edge"]]
         for i, ed in enumerate(keep):
@@ -548,8 +722,8 @@ def main() -> None:
     # 4c) Prefabsız düğümlerde yol sürekliliği: ETS2'de aynı noktada biten iki yol öğesi BAĞLI DEĞİLDİR
     #     (GPS, yapay zekâ trafiği ve iş rotaları kopar). Her prefabsız düğümde en düz/uyumlu kol çiftleri
     #     tek kenarda birleştirilir; 3-4 kollu kesişimde ana yol kesintisiz geçer, kalan kol orada biter.
-    jnodes = {j["node"] for j in chosen} | {h["node"] for h in hwj}
-    edges, road_links = link_through(edges, chosen + hwj, jnodes, arm_dir)
+    jnodes = {j["node"] for j in chosen} | {h["node"] for h in hwj} | {f_["node"] for f_ in forks}
+    edges, road_links = link_through(edges, chosen + hwj + forks, jnodes, arm_dir)
     # il geneli kenarlar: birleştirme sonrası ara düğümler (eski kesişimler) yeniden sadeleştirilir (segment bütçesi)
     before = sum(len(e["pts"]) - 1 for e in edges)
     for e in edges:
@@ -576,10 +750,15 @@ def main() -> None:
     keep_j, conv, dropj = [], 0, 0
     for j in chosen:
         ramps = [arm["edge"] for arm in j["arms"] if E_[arm["edge"]]["type"] == "ramp_1lane"]
-        if any(r in hw_edges for r in ramps):
+        # otoyol prefabına da bağlı (tek yönlü kalması gereken) rampa: kavşak tutulur, rampa tek yönlü kalır. Prefabın
+        # karşı yön şeridi boşta kalır (log: "[traffic] Unable to determine output road lane") ama rampa yönündeki
+        # akış ve GPS çalışır; kavşak atılınca kavşak rampası şehre hiç bağlanmıyordu (ilçeler kopuk, 2026-11-23).
+        keep_ow = [r for r in ramps if r in hw_edges]
+        if keep_ow:
             dropj += 1
-            continue
         for r in ramps:
+            if r in keep_ow:
+                continue
             e = E_[r]
             e.update(type="r1_city", oneway=False, reverse=False)
             conv += 1
@@ -587,12 +766,12 @@ def main() -> None:
     for i, j in enumerate(keep_j):
         j["id"] = i
     chosen = keep_j
-    print(f"şehir kavşağındaki rampa: {conv} iki yönlü yola çevrildi, {dropj} kavşak atıldı (otoyol rampası)")
+    print(f"şehir kavşağındaki rampa: {conv} iki yönlü yola çevrildi, {dropj} kavşakta otoyol rampası tek yönlü kaldı")
     meta = {"scale_divisor": S, "origin_osm_node": 26505108, "axes": "+X doğu, +Z güney, Y=0",
             "prefab_radius": a.prefab_radius, "attribution": "(c) OpenStreetMap contributors, ODbL 1.0"}
     dst = ROOT / "data" / "processed" / f"map_graph_s{S:g}.json"
     # 1) otoyol prefab ↔ yol şerit sayısı eşleme (hi/lo prefab + hw2/3/4_oneway); çelişkili otoyol kavşaklarını atar
-    dst.write_text(json.dumps({"meta": meta, "edges": edges, "junctions": chosen, "hw_junctions": hwj,
+    dst.write_text(json.dumps({"meta": meta, "edges": edges, "junctions": chosen, "hw_junctions": hwj, "ramp_forks": forks,
                                "road_links": road_links}, ensure_ascii=False), encoding="utf-8")
     import assign_hw_lanes
     assign_hw_lanes.main(str(dst))
@@ -601,13 +780,16 @@ def main() -> None:
     # 2) Oyunun yol ağı: yalnız prefab düğümleri, birleşik yollar ve uç bağlantıları bağlıdır. Depo ve garajlar
     #    SON ağın en büyük bağlı bileşenine konur → her HQ şehrinden diğer şehirlerin depolarına rota (ilk iş) bulunur.
     #    (Aksi halde yeni profilde "No valid offers found for player's HQ city" → oyun kapanıyordu, 2026-11-22.)
-    main_edges = main_component(edges, chosen + hwj, road_links)
+    road_links = heal_links(edges, chosen + hwj + forks, road_links)
+    main_edges = main_component(edges, chosen + hwj + forks, road_links)
     print(f"ana bağlı ağ: {len(main_edges)}/{len(edges)} kenar, "
           f"%{100 * sum(e['len'] for e in edges if e['id'] in main_edges) / sum(e['len'] for e in edges):.1f} uzunluk")
     depots = place_depots(edges, chosen, S, a, links=road_links, allowed=main_edges)
     cities = assign_cities(depots, edges, S)
     garages = place_garages(edges, chosen, depots, S, links=road_links, allowed=main_edges, cities=cities)
-    out = {"meta": meta, "edges": edges, "junctions": chosen, "hw_junctions": hwj, "depots": depots, "garages": garages,
+    signs = place_signs(edges, chosen + hwj + forks + depots + garages, cities, S, main_edges)
+    out = {"meta": meta, "edges": edges, "junctions": chosen, "hw_junctions": hwj, "ramp_forks": forks, "signs": signs,
+           "depots": depots, "garages": garages,
            "cities": cities, "road_links": road_links, "city_areas": city_grid(edges, S)}
     dst.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
     deg =Counter(len(v) for v in inc.values())
@@ -1041,6 +1223,94 @@ def place_depots(edges, chosen, S, a, per_city=3, min_gap=250.0, links=(), allow
     return out
 
 
+def heal_links(edges, junctions, links):
+    """Prefabı sonradan atılan düğümlerde (şerit eşlemede bırakılan otoyol kavşağı, otoyol rampalı şehir kavşağı)
+    kollar boşta kalıyordu: otoyol o noktada kopuyor, ilçeler ayrı ağlara bölünüyordu (2026-11-23). Aynı düğümde
+    boşta kalan uyumlu yol uçları en düz çift olarak C#'ta birleştirilir (road_links). Yalnız bağlantılarla oluşan
+    halka kurulmaz (editör "inconsistent linkage")."""
+    used = {(a["edge"], a["end"]) for j in junctions for a in j["arms"]}
+    used |= {(l[0], l[1]) for l in links} | {(l[2], l[3]) for l in links}
+    par = {}
+
+    def f(x):
+        par.setdefault(x, x)
+        while par[x] != x:
+            par[x] = par[par[x]]
+            x = par[x]
+        return x
+
+    for l in links:
+        par[f(l[0])] = f(l[2])
+    E = {e["id"]: e for e in edges}
+    # boşta uçlar konuma göre (3 m) kümelenir: kesişim kümelemesi/sadeleştirme sonrası aynı kavşaktaki uçlar farklı
+    # düğüm kimliğinde 1-3 m arayla kalabiliyor (D-130 Gölcük-Karamürsel otoyol şeridi böyle kopuktu, 2026-11-23)
+    fe = [(e["id"], end, e["pts"][0] if end == "a" else e["pts"][-1]) for e in edges for end in ("a", "b")
+          if (e["id"], end) not in used]
+    cell = defaultdict(list)
+    for i, (_, _, p) in enumerate(fe):
+        cell[(int(p[0] // 3), int(p[1] // 3))].append(i)
+    cp = list(range(len(fe)))
+
+    def cf(x):
+        while cp[x] != x:
+            cp[x] = cp[cp[x]]
+            x = cp[x]
+        return x
+    for i, (_, _, p) in enumerate(fe):
+        gx, gz = int(p[0] // 3), int(p[1] // 3)
+        for dx in (-1, 0, 1):
+            for dz in (-1, 0, 1):
+                for j in cell[(gx + dx, gz + dz)]:
+                    if j != i and math.dist(p, fe[j][2]) < 3.0:
+                        cp[cf(i)] = cf(j)
+    free = defaultdict(list)
+    for i, (eid, end, _) in enumerate(fe):
+        free[cf(i)].append((eid, end))
+
+    def grp(t):
+        return "ow" if t.startswith("hw") and "oneway" in t or t == "ramp_1lane" else                ("tw" if t in CITY or t in R2 or t == "service" else None)
+
+    def d(e, end):
+        ps = e["pts"] if end == "a" else e["pts"][::-1]
+        q = ps[min(len(ps) - 1, 1)]
+        L = math.dist(ps[0], q) or 1
+        return ((q[0] - ps[0][0]) / L, (q[1] - ps[0][1]) / L)
+
+    new = []
+    for n, ends in free.items():
+        if len(ends) < 2:
+            continue
+        pairs = []
+        for i in range(len(ends)):
+            for j in range(i + 1, len(ends)):
+                x, y = ends[i], ends[j]
+                ex, ey = E[x[0]], E[y[0]]
+                if x[0] == y[0]:
+                    continue
+                gx, gy = grp(ex["type"]), grp(ey["type"])
+                if gx is None or gy is None:
+                    continue
+                if gx == "ow" and gy == "ow":
+                    if {x[1], y[1]} != {"a", "b"} or ex.get("reverse") or ey.get("reverse"):
+                        continue
+                elif gx != gy and "hw" in (ex["type"][:2], ey["type"][:2]):
+                    continue  # otoyol şeridi yalnız otoyol şeridi/rampayla
+                dx, dy = d(ex, x[1]), d(ey, y[1])
+                pairs.append((dx[0] * dy[0] + dx[1] * dy[1], x, y))
+        pairs.sort(key=lambda t: t[0])
+        done = set()
+        for dot, x, y in pairs:
+            if x in done or y in done or (len(ends) > 2 and dot > -0.3):
+                continue
+            if f(x[0]) == f(y[0]):
+                continue
+            par[f(x[0])] = f(y[0])
+            done |= {x, y}
+            new.append([x[0], x[1], y[0], y[1]])
+    print(f"boşta kalan uç onarımı: {len(new)} bağlantı")
+    return list(links) + new
+
+
 def main_component(edges, junctions, links):
     """Oyunda bağlı olan en büyük yol ağının kenar kimlikleri (prefab kolları + uç bağlantıları ile birleşim)."""
     par = {}
@@ -1087,7 +1357,11 @@ def place_garages(edges, chosen, depots, S, links=(), along=26.7, need=78.0, cle
     def center_dist(e):
         return min((min(math.dist(p_, c_) for p_ in e["pts"][::max(1, len(e["pts"]) // 8)] + [e["pts"][-1]])
                     for c_ in centers), default=0.0)
-    for ed in sorted(edges, key=lambda e: (center_dist(e), -e["len"])):
+    # HQ şehrinde depo yoksa yeni profilde ilk iş üretilemez ("No valid offers found for player's HQ city" → oyun
+    # kapanır): garaj yalnız depolu şehirlere. Önce rahat ölçüt (78 m düz parça), sonra sıkışık merkezler için 58 m.
+    with_depot = {d["city"] for d in depots}
+    order = sorted(edges, key=lambda e: (center_dist(e), -e["len"]))
+    for need_, clear_, ed in [(need, clear, e) for e in order] + [(58.0, 30.0, e) for e in order]:
         if ed["type"] not in ("r1_city", "r1_city_narrow") or ed["oneway"]:
             continue
         if allowed is not None and ed["id"] not in allowed:
@@ -1096,11 +1370,11 @@ def place_garages(edges, chosen, depots, S, links=(), along=26.7, need=78.0, cle
         for i in range(len(pts) - 1):
             P, Q = pts[i], pts[i + 1]
             L = math.dist(P, Q)
-            if L < need:
+            if L < need_:
                 continue
             mid = ((P[0] + Q[0]) / 2, (P[1] + Q[1]) / 2)
             city = grid_city(rects, mid)
-            if city in done:
+            if city in done or city not in with_depot:
                 continue
             if any(math.dist(mid, j) < 70 for j in jpts) or any(math.dist(mid, d) < 160 for d in dpts):
                 continue
@@ -1109,7 +1383,7 @@ def place_garages(edges, chosen, depots, S, links=(), along=26.7, need=78.0, cle
             for sgn in (1, -1):
                 for k in (-20, 0, 20):
                     body = Point(mid[0] + ux * k - uz * 40 * sgn, mid[1] + uz * k + ux * 40 * sgn)
-                    if any(q_ != ed["id"] and lines[q_].distance(body) < clear for q_ in ltree.query(body.buffer(clear))):
+                    if any(q_ != ed["id"] and lines[q_].distance(body) < clear_ for q_ in ltree.query(body.buffer(clear_))):
                         ok = False
             probe = [(mid[0] + ux * k - uz * 60 * sg, mid[1] + uz * k + ux * 60 * sg) for k in (-40, 0, 40) for sg in (1, -1)]
             if not ok or any(grid_city(rects, q_) != city for q_ in probe + [mid]):
@@ -1144,6 +1418,142 @@ def place_garages(edges, chosen, depots, S, links=(), along=26.7, need=78.0, cle
             break
     missing = sorted(set(CITY_TOKENS.values()) - done)
     print(f"garaj: {len(out)} şehir; garajsız: {missing}")
+    return out
+
+
+# Türkiye tabela şablonları (Road to the Black Sea, def/sign/templates.mod_tr.sii); metin kimlikleri oyunun kendi
+# Edirne tabelalarından okundu (mapgen signscan). Öznitelik 0 = metin.
+SIGN_CITY = {"model": "dlc_blke_400", "template": "sign_templ.tr_1", "area": "ml2",
+             "name": 105644032, "pop": 1730019327, "alt": 1241776128}
+SIGN_PLACE = {"model": "dlc_blke_439", "template": "sign_templ.tr_150", "area": "ml2", "name": 996016128}
+CITY_NAMES = {"gebze": "Gebze", "darica": "Darıca", "cayirova": "Çayırova", "dilovasi": "Dilovası", "izmit": "İzmit",
+              "korfez": "Körfez", "derince": "Derince", "golcuk": "Gölcük", "karamursel": "Karamürsel",
+              "kandira": "Kandıra", "kartepe": "Kartepe", "basiskele": "Başiskele"}
+# yaklaşık nüfus ve merkez rakımı (m) – tabela metni
+CITY_SIGN = {"gebze": (400000, 120), "darica": (220000, 40), "cayirova": (150000, 90), "dilovasi": (50000, 30),
+             "izmit": (370000, 10), "korfez": (180000, 20), "derince": (150000, 20), "golcuk": (175000, 5),
+             "karamursel": (60000, 5), "kandira": (55000, 60), "kartepe": (135000, 150), "basiskele": (120000, 30)}
+
+
+def tr_upper(t):
+    return t.replace("i", "İ").replace("ı", "I").upper()
+
+
+def place_signs(edges, items, cities, S, main_edges, max_place=450):
+    """Şehir giriş tabelaları (ad, nüfus, rakım) ve mahalle/köy ad tabelaları. Tabela yolun trafik yönüne göre sağına
+    konur, ön yüzü (+Z) gelen sürücüye bakar (oyun verisinden ölçüldü). Çıktı: graph["signs"]."""
+    from shapely.geometry import Point
+    from shapely.strtree import STRtree
+    jp = []
+    for it in items:
+        if "x" in it:
+            jp.append((it["x"], it["z"]))
+        elif "mid" in it:
+            jp.append(tuple(it["mid"]))
+        elif "n0" in it:
+            jp.append(tuple(it["n0"]))
+    jgrid = defaultdict(list)
+    for p in jp:
+        jgrid[(int(p[0] // 50), int(p[1] // 50))].append(p)
+
+    def near_j(p, r):
+        gx, gz = int(p[0] // 50), int(p[1] // 50)
+        return any(math.dist(p, q) < r for dx in (-1, 0, 1) for dz in (-1, 0, 1) for q in jgrid[(gx + dx, gz + dz)])
+    TW = [e for e in edges if not e["oneway"] and (e["type"] in CITY or e["type"] in R2)]
+    out, sgrid = [], defaultdict(list)
+
+    def add(p, d, kind, texts, model, tmpl, gap):
+        off = 11.0 if kind == "r2" else 7.0
+        rx, rz = -d[1], d[0]
+        q = (p[0] + rx * off, p[1] + rz * off)
+        gx, gz = int(q[0] // 100), int(q[1] // 100)
+        if any(math.dist(q, w) < gap for dx in (-1, 0, 1) for dz in (-1, 0, 1) for w in sgrid[(gx + dx, gz + dz)]):
+            return False
+        sgrid[(gx, gz)].append(q)
+        out.append({"x": round(q[0], 2), "z": round(q[1], 2), "dir": [round(d[0], 4), round(d[1], 4)],
+                    "model": model, "template": tmpl, "texts": texts})
+        return True
+
+    # 1) şehir girişleri: merkezden R uzaklıkta yolun çemberi kestiği noktada, merkeze doğru giden trafiğe
+    n_city = 0
+    for c in cities:
+        if not c.get("center") or c["token"] not in CITY_SIGN:
+            continue
+        pop, alt = CITY_SIGN[c["token"]]
+        R = 1100.0 if pop >= 250000 else (850.0 if pop >= 120000 else 600.0)
+        cx, cz = c["center"]
+        cand = []
+        for e in TW:
+            ps = e["pts"]
+            for P, Q in zip(ps, ps[1:]):
+                dp, dq = math.dist(P, (cx, cz)), math.dist(Q, (cx, cz))
+                if (dp - R) * (dq - R) > 0 or abs(dp - dq) < 1e-6:
+                    continue
+                t = (R - dp) / (dq - dp)
+                X = (P[0] + (Q[0] - P[0]) * t, P[1] + (Q[1] - P[1]) * t)
+                inner, outer = (Q, P) if dq < dp else (P, Q)
+                L = math.dist(inner, outer) or 1
+                d = ((inner[0] - outer[0]) / L, (inner[1] - outer[1]) / L)
+                if near_j(X, 30):
+                    continue
+                ang = math.atan2(X[1] - cz, X[0] - cx)
+                cand.append((e["prio"] + (0 if e["id"] in main_edges else 3), ang, X, d, "r2" if e["type"] in R2 else "r1"))
+        cand.sort(key=lambda x: x[0])
+        used = []
+        for pr, ang, X, d, kind in cand:
+            if len(used) >= 4:
+                break
+            if any(abs((ang - u + math.pi) % (2 * math.pi) - math.pi) < math.radians(70) for u in used):
+                continue
+            texts = [[SIGN_CITY["name"], SIGN_CITY["area"], tr_upper(CITY_NAMES[c["token"]])],
+                     [SIGN_CITY["pop"], SIGN_CITY["area"], f"{pop:,}".replace(",", ".")],
+                     [SIGN_CITY["alt"], SIGN_CITY["area"], str(alt)]]
+            if add(X, d, kind, texts, SIGN_CITY["model"], SIGN_CITY["template"], 40):
+                used.append(ang)
+                n_city += 1
+    # 2) mahalle / köy adları (OSM place=suburb/neighbourhood/quarter/village): en yakın iki yönlü yolun kenarına
+    lines = [LineString(e["pts"]) for e in TW]
+    tree = STRtree(lines)
+    g = lambda x, y: ((x - E0) / S, -(y - N0) / S)
+    seen, places = set(), []
+    for f in (RAW / "places.json", RAW / "kocaeli" / "places.json"):
+        if not f.exists():
+            continue
+        for el in json.loads(f.read_text(encoding="utf-8"))["elements"]:
+            t = el.get("tags", {})
+            if t.get("place") not in ("suburb", "neighbourhood", "quarter", "village") or not t.get("name"):
+                continue
+            if el["id"] in seen or "lat" not in el:
+                continue
+            seen.add(el["id"])
+            places.append((g(*T.transform(el["lon"], el["lat"])), t["name"], t["place"]))
+    rects = city_grid(edges, S)
+    n_place = 0
+    for P, name, kind in sorted(places, key=lambda x: x[2] == "village"):
+        if n_place >= max_place:
+            break
+        if not any(r["x0"] <= P[0] <= r["x1"] and r["z0"] <= P[1] <= r["z1"] for r in rects):
+            continue  # il dışı (ör. İstanbul köyleri)
+        i = tree.nearest(Point(P))
+        ln = lines[i]
+        if ln.distance(Point(P)) > 150:
+            continue
+        s_ = ln.project(Point(P))
+        X = ln.interpolate(s_)
+        X2 = ln.interpolate(min(ln.length, s_ + 3.0))
+        X1 = ln.interpolate(max(0.0, s_ - 3.0))
+        L = X1.distance(X2) or 1
+        d = ((X2.x - X1.x) / L, (X2.y - X1.y) / L)
+        # yer adının bulunduğu taraf yolun sağı olsun (tabela mahalleye bakan yanda)
+        if (P[0] - X.x) * (-d[1]) + (P[1] - X.y) * d[0] < 0:
+            d = (-d[0], -d[1])
+        if near_j((X.x, X.y), 28):
+            continue
+        nm = name if len(name) <= 22 else name.split()[0]
+        if add((X.x, X.y), d, "r2" if TW[i]["type"] in R2 else "r1",
+               [[SIGN_PLACE["name"], SIGN_PLACE["area"], tr_upper(nm)]], SIGN_PLACE["model"], SIGN_PLACE["template"], 60):
+            n_place += 1
+    print(f"tabela: {n_city} şehir girişi, {n_place} mahalle/köy adı")
     return out
 
 

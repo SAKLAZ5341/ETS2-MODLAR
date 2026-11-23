@@ -19,10 +19,34 @@
   "hw_junctions": {
     "_doc": "ppdnav ile doğrulandı. exit = ger_hw3_exit_joint_mirrored (node0 4 şerit giriş -> node1 3 şerit devam + node2 sağ rampa); merge = ger_hw3_exit_joint_tmpl_v02 (node0 3 şerit + node2 sağ rampa -> node1 4 şerit). anchor = OSM düğümüne oturan prefab düğümü.",
     "_doc2": "hi/lo seçimini tools/geo/assign_hw_lanes.py yapar (prefab düğümü ile yol şerit sayısı eşleşsin diye). lo: ch_2y016 = 3 -> 2 + rampa, ch_2y017 = 2 + rampa -> 3.",
-    "exit_hi": { "token": "mod_ger_31", "ppd": "/prefab2/fork_temp/ger/ger_hw3_exit_joint_mirrored_tmpl.ppd", "anchor": 1, "look": "ger_1", "variant": "sh_ger" },
-    "merge_hi": { "token": "ch_4202j", "ppd": "/prefab2/fork_temp/ger/ger_hw3_exit_joint_tmpl_v02.ppd", "anchor": 0, "look": "ger_1", "variant": "default" },
-    "exit_lo": { "token": "ch_2y016", "ppd": "/prefab2/fork_temp/ger/ger_hw3_oneway_to_hw2_oneway_split_to_hw1_oneway.ppd", "anchor": 1, "look": "ger_1", "variant": "default" },
-    "merge_lo": { "token": "ch_2y017", "ppd": "/prefab2/fork_temp/ger/ger_hw2_oneway_and_hw1_oneway_merge_to_hw3_oneway.ppd", "anchor": 0, "look": "ger_1", "variant": "default" }
+    "exit_hi": {
+      "token": "mod_ger_31",
+      "ppd": "/prefab2/fork_temp/ger/ger_hw3_exit_joint_mirrored_tmpl.ppd",
+      "anchor": 1,
+      "look": "ger_1",
+      "variant": "sh_ger"
+    },
+    "merge_hi": {
+      "token": "ch_4202j",
+      "ppd": "/prefab2/fork_temp/ger/ger_hw3_exit_joint_tmpl_v02.ppd",
+      "anchor": 0,
+      "look": "ger_1",
+      "variant": "default"
+    },
+    "exit_lo": {
+      "token": "ch_2y016",
+      "ppd": "/prefab2/fork_temp/ger/ger_hw3_oneway_to_hw2_oneway_split_to_hw1_oneway.ppd",
+      "anchor": 1,
+      "look": "ger_1",
+      "variant": "default"
+    },
+    "merge_lo": {
+      "token": "ch_2y017",
+      "ppd": "/prefab2/fork_temp/ger/ger_hw2_oneway_and_hw1_oneway_merge_to_hw3_oneway.ppd",
+      "anchor": 0,
+      "look": "ger_1",
+      "variant": "default"
+    }
   },
   "terrain_size": {
     "hw3_divided": 10,
@@ -146,11 +170,43 @@
           "r2",
           "r2"
         ]
+      },
+      {
+        "token": "mod_ger_70",
+        "ppd": "/prefab2/cross_temp/ger/ger_r1_x_r1_y_narrow_tmpl.ppd",
+        "classes": [
+          "r1",
+          "r1",
+          "r1"
+        ],
+        "shape": "y"
+      },
+      {
+        "token": "mod_ger_69",
+        "ppd": "/prefab2/cross_temp/ger/ger_r1_x_r1_y_narrow_mirrored_tmpl.ppd",
+        "classes": [
+          "r1",
+          "r1",
+          "r1"
+        ],
+        "shape": "y"
+      },
+      {
+        "token": "ger_2i03f",
+        "ppd": "/prefab2/cross_temp/ger/ger_r2_no_offset_x_r1_narrow_tmpl.ppd",
+        "classes": [
+          "r1",
+          "r2",
+          "r1",
+          "r2"
+        ],
+        "variant": "default",
+        "shape": "x"
       }
     ],
     "look": "ger_1",
     "variant": "clean",
-    "max_angle_error_deg": 40
+    "max_angle_error_deg": 70
   },
   "limits": {
     "max_roads": 0,
@@ -244,5 +300,20 @@
       }
     },
     "city_area": true
+  },
+  "ramp_forks": {
+    "_doc": "Tek şeritli tek yönlü rampa Y ayrılma/birleşme (build_city_graph.py 3c). ppdnav: split node0 giriş -> node1 sol, node2 sağ; join node0 sol + node2 sağ -> node1.",
+    "split": {
+      "token": "341",
+      "ppd": "/prefab/fork_temp/sc/exit_road_joint_short_mirrored_tmpl.ppd",
+      "look": "light_gray",
+      "variant": "sh_a"
+    },
+    "join": {
+      "token": "342",
+      "ppd": "/prefab/fork_temp/sc/exit_road_joint_short_tmpl.ppd",
+      "look": "light_gray",
+      "variant": "sh_a"
+    }
   }
 }

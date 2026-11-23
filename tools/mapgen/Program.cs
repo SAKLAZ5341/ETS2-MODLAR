@@ -35,6 +35,7 @@ internal static class Program
             "reflect" => Reflect(args.Skip(1).ToArray()),
             "modelinfo" => ModelInfo(cfg, args.Skip(1).SelectMany(a => a.StartsWith("@") ? File.ReadAllLines(a[1..]) : new[] { a }).Where(s => s.Length > 0).ToArray()),
             "prefabinfo" => PrefabInfo(cfg, args.Skip(1).ToArray()),
+            "signscan" => SignScan(cfg, args.Skip(1).ToArray()),
             "ppdnav" => PpdNav(cfg, args.Skip(1).ToArray()),
             "companyprefabs" => CompanyPrefabs(cfg),
             "nodetest" => NodeTest(cfg, args.Skip(1).ToArray()),
@@ -111,6 +112,64 @@ internal static class Program
             Console.WriteLine($"== {t.FullName}");
             foreach (var m in t.GetMembers(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.DeclaredOnly))
                 Console.WriteLine("   " + m);
+        }
+        return 0;
+    }
+
+    // ---------------------------------------------------------------- signscan
+    // Oyunun kendi haritasındaki (DLC sektörleri) tabela öğelerinin şablon ve metin geçersiz kılmalarını yazdırır:
+    // signscan <dlc.scs> <çıktı klasörü> [şablon öneki]. Sektörler ve base.scs'teki europe.mbd geçici klasöre çıkarılır.
+    static float DistSeg(Vector3 p, Vector3 a, Vector3 b)
+    {
+        var ab = b - a; float t = Math.Clamp(Vector3.Dot(p - a, ab) / Math.Max(ab.LengthSquared(), 1e-6f), 0, 1);
+        return Vector3.Distance(p, a + ab * t);
+    }
+
+    static int SignScan(JsonElement cfg, string[] a)
+    {
+        var gameRoot = cfg.GetProperty("game_root").GetString();
+        var tmp = a[1]; Directory.CreateDirectory(Path.Combine(tmp, "europe"));
+        using (var bfs = HashFsReader.Open(Path.Combine(gameRoot, "base_map.scs")))
+            File.WriteAllBytes(Path.Combine(tmp, "europe.mbd"), bfs.Extract("/map/europe.mbd")[0]);
+        var secs = new List<TruckLib.ScsMap.SectorCoordinate>();
+        using (var dfs = HashFsReader.Open(Path.Combine(gameRoot, a[0])))
+        {
+            foreach (var f in dfs.GetDirectoryListing("/map/europe").Files)
+            {
+                var dst = Path.Combine(tmp, "europe", Path.GetFileName(f));
+                if (!File.Exists(dst)) File.WriteAllBytes(dst, dfs.Extract(f)[0]);
+                if (f.EndsWith(".base")) secs.Add(TruckLib.ScsMap.Sector.SectorCoordsFromSectorFilePath(f));
+            }
+        }
+        string pre = a.Length > 2 ? a[2] : "tr_";
+        int shown = 0;
+        foreach (var sc in secs)
+        {
+            Map m;
+            try { m = Map.Open(Path.Combine(tmp, "europe.mbd"), new List<TruckLib.ScsMap.SectorCoordinate> { sc }); }
+            catch (Exception ex) { Console.WriteLine($"{sc}: {ex.Message}"); continue; }
+            var signs = m.MapItems.Values.OfType<Sign>().ToList();
+            if (shown == 0) Console.WriteLine($"{sc}: öğe {m.MapItems.Count}, tabela {signs.Count}, şablonlar: " + string.Join(",", signs.Select(x => x.SignTemplate + "/" + x.Model).Distinct().Take(8)));
+            foreach (var it in signs)
+            {
+                if (it.SignTemplate == null || !(it.SignTemplate.StartsWith(pre) || it.Model.ToString().StartsWith(pre))) continue;
+                Console.WriteLine($"{sc} model={it.Model} tmpl={it.SignTemplate} look={it.Look} var={it.Variant} pos={it.Node.Position}");
+                {
+                    var sp = it.Node.Position;
+                    var fwd = Vector3.Transform(new Vector3(0, 0, 1), it.Node.Rotation);
+                    var rd = m.MapItems.Values.OfType<Road>().Select(r => (r, d: DistSeg(sp, r.Node.Position, r.ForwardNode.Position)))
+                              .OrderBy(x => x.d).FirstOrDefault();
+                    if (rd.r != null)
+                    {
+                        var t = Vector3.Normalize(rd.r.ForwardNode.Position - rd.r.Node.Position);
+                        var right = new Vector3(-t.Z, 0, t.X);
+                        Console.WriteLine($"   yol {rd.r.RoadType} d={rd.d:F1} yolyön=({t.X:F2},{t.Z:F2}) tabela+Z=({fwd.X:F2},{fwd.Z:F2}) dot={Vector3.Dot(fwd, t):F2} sağda={Vector3.Dot(sp - rd.r.Node.Position, right):F1}");
+                    }
+                }
+                foreach (var o in it.SignOverrides)
+                    Console.WriteLine($"   id={o.Id} area={o.AreaName} " + string.Join(" ", o.Attributes.Select(x => $"[{x.Index}:{x.Type.Name}={x.GetValue()}]")));
+                if (++shown > 40) return 0;
+            }
         }
         return 0;
     }
@@ -412,6 +471,10 @@ internal static class Program
 
         // prefab listesi: her birinin düğüm sınıfları (r1/r2) .ppd düğüm sırasıyla
         var specList = new List<(string token, TruckLib.Models.Ppd.PrefabDescriptor ppd, string[] cls, string variant)>();
+        // biçim (t/y/x): build_city_graph.py kavşağa "shape" yazar (Y prefabının dal kolu 25 m, yalnız uzun kolda)
+        var shapeOf = new Dictionary<string, string>();
+        foreach (var j in jcfg.GetProperty("prefabs").EnumerateArray())
+            shapeOf[j.GetProperty("token").GetString()] = j.TryGetProperty("shape", out var shp) ? shp.GetString() : (j.GetProperty("classes").GetArrayLength() == 4 ? "x" : "t");
         foreach (var j in jcfg.GetProperty("prefabs").EnumerateArray())
             specList.Add((j.GetProperty("token").GetString(),
                           TruckLib.Models.Ppd.PrefabDescriptor.Open(j.GetProperty("ppd").GetString(), fs),
@@ -442,7 +505,8 @@ internal static class Program
 
             float bestCost = float.MaxValue, bestMax = 0; int bestYaw = 0; int[] bestPerm = null;
             (string token, TruckLib.Models.Ppd.PrefabDescriptor ppd, string[] cls, string variant) spec = default;
-            foreach (var sp in specList.Where(s => s.cls.Length == arms.Count))
+            string wantShape = jn.TryGetProperty("shape", out var wsh) ? wsh.GetString() : null;
+            foreach (var sp in specList.Where(s => s.cls.Length == arms.Count && (wantShape == null || shapeOf[s.token] == wantShape)))
             {
                 if (!sp.cls.OrderBy(x => x).SequenceEqual(armCls.OrderBy(x => x))) continue;
                 var nodeP = sp.ppd.Nodes.Select(nd => nd.Position).ToList();
@@ -543,6 +607,59 @@ internal static class Program
                 catch (Exception ex) { hwRejected++; if (hwRejected < 10) Console.WriteLine($"otoyol kavşağı {hj.GetProperty("id")}: {ex.Message}"); }
             }
             Console.WriteLine($"otoyol çıkış/katılma prefabı: {hwPlaced} (reddedilen {hwRejected})");
+        }
+
+        // 1b') Rampa çatalları (build_city_graph.py 3c): tek şeritli tek yönlü rampanın Y ayrılması / birleşmesi.
+        //      split = exit_road_joint_short_mirrored (node0 giriş → node1 sol, node2 sağ çıkış),
+        //      join  = exit_road_joint_short (node0 sol, node2 sağ giriş → node1 çıkış); ppdnav ile doğrulandı.
+        int fkPlaced = 0, fkRejected = 0;
+        if (cfg.TryGetProperty("ramp_forks", out var fcfg) && graph.TryGetProperty("ramp_forks", out var flist))
+        {
+            var fppd = new Dictionary<string, TruckLib.Models.Ppd.PrefabDescriptor>();
+            foreach (var fj in flist.EnumerateArray())
+            {
+                try
+                {
+                    var kindS = fj.GetProperty("kind").GetString();
+                    var fc = fcfg.GetProperty(kindS);
+                    if (!fppd.TryGetValue(kindS, out var ppd)) fppd[kindS] = ppd = TruckLib.Models.Ppd.PrefabDescriptor.Open(fc.GetProperty("ppd").GetString(), fs);
+                    var np = ppd.Nodes.Select(n => n.Position).ToList();
+                    int[] slot = kindS == "split" ? new[] { 0, 1, 2 } : new[] { 1, 0, 2 };
+                    var brMid = (np[slot[1]] + np[slot[2]]) / 2;
+                    var lt = kindS == "split" ? brMid - np[slot[0]] : np[slot[0]] - brMid;
+                    var localT = Vector2.Normalize(new Vector2(lt.X, lt.Z));
+                    var travel = Vector2.Normalize(new Vector2((float)fj.GetProperty("travel")[0].GetDouble(), (float)fj.GetProperty("travel")[1].GetDouble()));
+                    int bestYaw = 0; float bestDot = -2;
+                    for (int yd = 0; yd < 360; yd++)
+                    {
+                        var v = Vector3.Transform(new Vector3(localT.X, 0, localT.Y), Quaternion.CreateFromYawPitchRoll(yd * MathF.PI / 180f, 0, 0));
+                        float dot = Vector2.Dot(new Vector2(v.X, v.Z), travel);
+                        if (dot > bestDot) { bestDot = dot; bestYaw = yd; }
+                    }
+                    var q = Quaternion.CreateFromYawPitchRoll(bestYaw * MathF.PI / 180f, 0, 0);
+                    var J = V(fj.GetProperty("x").GetDouble(), fj.GetProperty("z").GetDouble());
+                    var ctr = (np[0] + np[1] + np[2]) / 3;
+                    var origin = J - Vector3.Transform(ctr, q);
+                    var w = np.Select(p => origin + Vector3.Transform(p, q)).ToList();
+                    var right = new Vector2(-travel.Y, travel.X);
+                    float sl = Vector2.Dot(new Vector2(w[slot[1]].X - J.X, w[slot[1]].Z - J.Z), right);
+                    float sr = Vector2.Dot(new Vector2(w[slot[2]].X - J.X, w[slot[2]].Z - J.Z), right);
+                    if (sl >= sr) { fkRejected++; if (fkRejected < 5) Console.WriteLine($"rampa çatalı {fj.GetProperty("id")}: sol/sağ ters"); continue; }
+                    var pf = AddPrefabChecked(map, fc.GetProperty("token").GetString(), ppd, q, w);
+                    pf.Look = fc.GetProperty("look").GetString();
+                    pf.Variant = fc.GetProperty("variant").GetString();
+                    foreach (var arm in fj.GetProperty("arms").EnumerateArray())
+                    {
+                        int ni = arm.GetProperty("role").GetString() switch { "trunk" => slot[0], "left" => slot[1], _ => slot[2] };
+                        var actual = pf.Nodes.OrderBy(n => Vector3.DistanceSquared(n.Position, w[ni])).First().Position;
+                        attach[(arm.GetProperty("edge").GetInt32(), arm.GetProperty("end").GetString())] = (pf, actual, J, 12f);
+                    }
+                    noBuild.Add((J, 16f));
+                    fkPlaced++;
+                }
+                catch (Exception ex) { fkRejected++; if (fkRejected < 10) Console.WriteLine($"rampa çatalı {fj.GetProperty("id")}: {ex.Message}"); }
+            }
+            Console.WriteLine($"rampa çatalı prefabı: {fkPlaced} (reddedilen {fkRejected})");
         }
 
         int depots = 0, garagesPlaced = 0;
@@ -731,6 +848,33 @@ internal static class Program
                 }
         }
         Console.WriteLine($"prefab origin değiştirilen: {originChanged}");
+
+        // 1d) Tabelalar (build_city_graph.py place_signs): Türkiye şablonları; metin = öznitelik 0. Ön yüz (+Z) gelen
+        //     sürücüye bakar: yaw = atan2(-dx, -dz) (trafik yönü d).
+        int signs = 0;
+        if (graph.TryGetProperty("signs", out var slist))
+        {
+            foreach (var sg in slist.EnumerateArray())
+            {
+                try
+                {
+                    var pos = V(sg.GetProperty("x").GetDouble(), sg.GetProperty("z").GetDouble());
+                    var d = sg.GetProperty("dir");
+                    float dx = (float)d[0].GetDouble(), dz = (float)d[1].GetDouble();
+                    var si = Sign.Add(map, pos, sg.GetProperty("model").GetString(), sg.GetProperty("template").GetString());
+                    si.Node.Rotation = Quaternion.CreateFromYawPitchRoll(MathF.Atan2(-dx, -dz), 0, 0);
+                    foreach (var t in sg.GetProperty("texts").EnumerateArray())
+                    {
+                        var ov = new SignOverride { Id = t[0].GetUInt32(), AreaName = t[1].GetString() };
+                        ov.Attributes.Add(new SignOverrideAttribute<string> { Index = 0, Value = t[2].GetString() });
+                        si.SignOverrides.Add(ov);
+                    }
+                    signs++;
+                }
+                catch (Exception ex) { if (signs < 3) Console.WriteLine($"tabela: {ex.Message}"); }
+            }
+            Console.WriteLine($"tabela: {signs}");
+        }
 
         // 2) yollar
         float R = (float)graph.GetProperty("meta").GetProperty("prefab_radius").GetDouble() + 3f;

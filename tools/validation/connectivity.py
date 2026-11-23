@@ -30,7 +30,7 @@ def components(g):
 
     for e in g["edges"]:  # bir yol öğesinin iki ucu bağlı
         u(("e", e["id"]), ("e", e["id"]))
-    for j in g["junctions"] + g["hw_junctions"]:
+    for j in g["junctions"] + g["hw_junctions"] + g.get("ramp_forks", []):
         for arm in j["arms"]:
             u(("j", j["id"], j.get("kind", "c")), ("e", arm["edge"]))
     for k, d in enumerate(g.get("depots", [])):

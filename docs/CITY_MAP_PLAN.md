@@ -378,3 +378,23 @@ Paket `releases/saklaz_turkiye_map_0.2.0-dev_20261122_1414.scs`.
 - Ara sokak temizliği açık kalır: kapalıyken bağlantı %12, bina 6,5 bin, segment 23 bin (editör sınırı);
   açıkken %26, 10,1 bin bina, 13 bin segment.
 - Kalan büyük iş: otoyol çıkışları (530 rampa noktası prefabsız) → ilçeler arası bağlantı; tabelalar; Darıca/Çayırova HQ.
+
+## 28. İlçe bağlantıları ve tabelalar – 2026-11-23 08:50
+- Teşhis: ana bağlı ağ %12'ydi; otoyolun iki yönü ve ilçeler ayrı bileşenlerdeydi. Nedenler: rampa çatalları (tek şeritli
+  rampanın ayrılması/birleşmesi) prefabsızdı, şerit eşlemede bırakılan otoyol kavşakları ve otoyol rampalı şehir
+  kavşakları kollarını boşta bırakıyordu, 50 m çember kuralı yonca kavşaklarında çıkış+katılmayı eliyordu.
+- `build_city_graph.py`:
+  - 3c rampa çatalı: `exit_road_joint_short[_mirrored]_tmpl` (Y, 17 m; token 342/341, ppdnav ile doğrulandı) → 143 prefab.
+  - 3b: şerit zinciri uzunluğu, akış yönlü izdüşüm çakışma denetimi, rampa yanı ara değerli noktalarla → 279 çıkış/katılma.
+  - `heal_links`: aynı noktada (3 m) boşta kalan uyumlu uçlar `road_links` ile birleşir (D-130 böyle bağlandı).
+  - Kavşak açı uyumu Python'da (`prefab_angle_error`; T, Y 60°, X, r2×r1 X); `junction_excluded.json` artık gerekmez.
+    Yeni prefablar: Y `mod_ger_70/69`, r2×r1 X `ger_2i03f`. C# açı sınırı 70°.
+  - Prefab alamayan kesişimde engelleyen ana yol kolu (kısa kol / 5+ kol / dar açı) kaldırılır.
+  - Otoyol rampası tek yönlü kalarak şehir kavşağına bağlanır (önceden kavşak atılıyordu).
+  - Garaj yalnız depolu şehirlere (HQ'da iş olsun), sıkışık merkezlerde 58 m düz parça.
+- Sonuç: ana bağlı ağ %57,5 (710+ oyun-km); garaj/HQ: 10 ilçe (Darıca ve Karamürsel hariç); depo 20.
+- Tabelalar (`place_signs`, C# `Sign` + metin geçersiz kılma, öznitelik 0 = metin; kimlikler oyunun Edirne tabelalarından
+  `mapgen signscan` ile okundu): 33 şehir giriş tabelası (`dlc_blke_400`/`sign_templ.tr_1`: ad, nüfus, rakım) ve 397
+  mahalle/köy adı (`dlc_blke_439`/`sign_templ.tr_150`). Tabela trafik yönünün sağında, +Z gelen sürücüye bakar.
+- Önizleme logu temiz. Paket `releases/saklaz_turkiye_map_0.2.0-dev_20261123_0848.scs`.
+- Kalan: Darıca ve Karamürsel'in şehir içi ağı ana ağa bağlı değil (Darıca'da sokaklar prefab sığmadığı için siliniyor).
