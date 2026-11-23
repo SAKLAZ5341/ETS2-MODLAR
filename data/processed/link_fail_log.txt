@@ -1,0 +1,25 @@
+(330, b)-(4239, b) [3301,6,-596,8] ramp_1lane/r1_city: Unable to merge: both nodes have a backward item
+(1540, b)-(1515, b) [-298,8,914] ramp_1lane/r2_divided: Unable to merge: both nodes have a backward item
+(1605, a)-(4474, a) [-2432,4,-956,9] ramp_1lane/r1_city: Unable to merge: both nodes have a forward item
+(2277, a)-(4727, a) [12720,2,3173,7] ramp_1lane/r1_city: Unable to merge: both nodes have a forward item
+(3164, b)-(4001, b) [20401,9,-10190,3] güvensiz saç tokası r1_city/ramp_1lane
+(4150, b)-(4791, b) [15507,6,493,8] ramp_1lane/r1_city: Unable to merge: both nodes have a backward item
+(5948, a)-(2178, a) [14787,2,1021,1] yol kurulmadı
+(6002, b)-(4054, b) [17605,4,-2425,3] yol kurulmadı
+(6026, a)-(4603, b) [16584,9,-514,7] yol kurulmadı
+(1514, b)-(4349, a) [-154,6,929,9] güvensiz uzak
+(1695, a)-(4396, a) [-879,8,772,6] yol kurulmadı
+(2146, b)-(5229, a) [21014,-10935,9] yol kurulmadı
+(3262, a)-(5247, a) [18798,2,2315,8] yol kurulmadı
+(3925, b)-(4691, a) [15924,6,3849,8] yol kurulmadı
+(5380, a)-(5540, b) [-566,2,1345,6] güvensiz uzak
+(2205, b)-(3883, a) [16472,-20,1] güvensiz uzak
+(2175, b)-(6303, a) [15482,1,1025,2] yol kurulmadı
+(6353, b)-(3675, a) [16737,7,-251,4] güvensiz uzak
+(666, b)-(6358, a) [-1672,8,-3408,7] güvensiz uzak
+(6391, b)-(5943, a) [4802,8,1179,5] yol kurulmadı
+(6392, a)-(5944, b) [4832,4,1210,5] yol kurulmadı
+(6396, a)-(5976, b) [19665,6,-8750,9] yol kurulmadı
+(6398, b)-(5991, a) [15648,2,126,2] yol kurulmadı
+(6399, a)-(5992, b) [15610,1,144,8] güvensiz saç tokası ramp_1lane/r1_city
+(6405, b)-(6051, a) [9914,8,605,4] güvensiz saç tokası ramp_1lane/r1_city

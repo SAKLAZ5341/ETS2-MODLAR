@@ -28,6 +28,8 @@ RAW = ROOT / "data" / "raw"
 OUT = ROOT / "data" / "processed"
 T = Transformer.from_crs("EPSG:4326", "EPSG:32635", always_xy=True)
 E0, N0 = 705139.33, 4519475.38  # Gebze OSM düğümü 26505108 (build_city_graph.py ile aynı)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import warp as WARP  # noqa: E402  çekirdek büyütme
 
 NATURE = {
     ("landuse", "forest"): "forest", ("natural", "wood"): "forest",
@@ -47,7 +49,7 @@ PRIO = {"water": 9, "forest": 7, "scrub": 6, "park": 5, "sand": 5, "bare": 4, "f
 
 def proj(lon, lat, scale):
     e, n = T.transform(lon, lat)
-    return ((e - E0) / scale, -(n - N0) / scale)  # +X doğu, +Z güney
+    return WARP.proj(e, n, E0, N0, scale)  # +X doğu, +Z güney (çekirdek büyütmeli)
 
 
 def geom_polys(el, scale):
@@ -90,6 +92,7 @@ def main() -> None:
     ap.add_argument("--center-cell", type=float, default=160.0, help="ilçe merkezi zemin hücresi (oyun m)")
     ap.add_argument("--center-radius", type=float, default=1300.0, help="ilçe merkezi zemin yarıçapı (oyun m)")
     ap.add_argument("--smooth", type=int, default=2, help="çoğunluk filtresi tekrar sayısı")
+    ap.add_argument("--no-core", action="store_true", help="çekirdek ızgarası üretme (merkez + il geneli hücreleri)")
     ap.add_argument("--core-from", default="data/processed/ground_core_s3.json",
                     help="çekirdek zemini bu dosyadan aynen al (bbox = çekirdek kutusu); yoksa yeniden üret. "
                          "Yeniden üretilen geniş çekirdek zemini editörü 'Index outside array boundaries: 12 >= 12' ile çökertti")
@@ -102,9 +105,11 @@ def main() -> None:
     zs = [p[1] for e in graph["edges"] for p in e["pts"]]
     X0, X1 = min(xs) - a.margin, max(xs) + a.margin
     Z0, Z1 = min(zs) - a.margin, max(zs) + a.margin
-    cxs = [p[0] for e in graph["edges"] if not e.get("outer") for p in e["pts"]]
-    czs = [p[1] for e in graph["edges"] if not e.get("outer") for p in e["pts"]]
+    cxs = [p[0] for e in graph["edges"] if e.get("outer") is False for p in e["pts"]]  # eklenen bağlantı yolları hariç
+    czs = [p[1] for e in graph["edges"] if e.get("outer") is False for p in e["pts"]]
     core = (min(cxs) - a.margin, min(czs) - a.margin, max(cxs) + a.margin, max(czs) + a.margin)
+    if a.no_core:  # çekirdek ızgarası yok: büyütülen bölge ilçe merkezi + il geneli hücreleriyle (çekirdek ızgarası
+        core = (1e9, 1e9, 1e9 + 1, 1e9 + 1)  # editörü "Index outside array boundaries: 12 >= 12" ile çökertiyordu)
     core_runs = None
     cf = ROOT / a.core_from if a.core_from else None
     if cf is not None and cf.exists():
@@ -250,6 +255,7 @@ def main() -> None:
                      sea_runs=True, sea_only=True)
     meta = {"scale_divisor": a.scale, "cell": C, "outer_cell": CO, "bbox": [X0, Z0, X1, Z1], "core": core,
             "attribution": "(c) OpenStreetMap contributors, ODbL 1.0"}
+    runs = [r for r in runs if abs(r["x"]) < 1e8 and abs(r["z0"]) < 1e8]  # --no-core sahte çekirdek kutusu
     (OUT / f"ground_s{s}.json").write_text(json.dumps({"meta": meta, "runs": runs}, ensure_ascii=False), encoding="utf-8")
     print("parça: çekirdek", nc, "il geneli", len(runs) - nc,
           "uzunluk toplamı (km)", round(sum(r["z1"] - r["z0"] for r in runs) / 1000, 1))

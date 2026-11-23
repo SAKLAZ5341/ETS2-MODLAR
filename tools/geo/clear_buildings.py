@@ -32,6 +32,8 @@ HALF = {"hw3_divided": 12, "hw2_oneway": 5, "hw3_oneway": 7, "hw4_oneway": 9, "r
         "ramp_1lane": 4, "r1_city": 5, "r1_city_narrow": 5, "service": 4}
 T = Transformer.from_crs("EPSG:4326", "EPSG:32635", always_xy=True)
 E0, N0 = 705139.33, 4519475.38
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import warp as WARP  # noqa: E402  çekirdek büyütme
 
 
 def model_key(b):
@@ -68,7 +70,7 @@ def polys_of(el, g):
 def osm_buildings(path, S, have_ids):
     if not path.exists():
         return []
-    g = lambda x, y: ((x - E0) / S, -(y - N0) / S)
+    g = lambda x, y: WARP.proj(x, y, E0, N0, S)
     out = []
     for el in json.loads(path.read_text(encoding="utf-8"))["elements"]:
         if el["id"] in have_ids or "geometry" not in el or len(el["geometry"]) < 4:
@@ -127,7 +129,7 @@ def main():
     g = json.loads((ROOT / "data/processed/map_graph_s3.json").read_text(encoding="utf-8"))
     ex = json.loads((ROOT / "data/processed/map_export_s3.json").read_text(encoding="utf-8"))
     S = g["meta"]["scale_divisor"]
-    gfun = lambda x, y: ((x - E0) / S, -(y - N0) / S)
+    gfun = lambda x, y: WARP.proj(x, y, E0, N0, S)
     roads = [LineString(e["pts"]).buffer(HALF.get(e["type"], 5) + 0.5) for e in g["edges"]]
     for j in g["junctions"] + g["hw_junctions"]:
         roads.append(Point(j["x"], j["z"]).buffer(22))
@@ -138,6 +140,8 @@ def main():
     mtree = STRtree(mains)
 
     # aday binalar
+    for b in ex["buildings"]:  # map_export_s3.json çarpıtmasız 1:3 koordinatta → çekirdek büyütme
+        b["x"], b["z"] = (round(v, 3) for v in WARP.warp(b["x"], b["z"]))
     core_b = [b for b in ex["buildings"] if b.get("place", True) or True]
     for b in core_b:
         b["place"] = True

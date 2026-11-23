@@ -436,3 +436,17 @@ Paket `releases/saklaz_turkiye_map_0.2.0-dev_20261122_1414.scs`.
   Çözüm çekirdeğin yeniden tasarımı: bu ilçeler için daha büyük ölçek ya da ana cadde iskeleti.
 - Denendi, geri alındı: C# retlerini onarım döngüsünde kullanmak (7 ilçeye düşürdü); birikimli ret listesi.
 - Paket `releases/saklaz_turkiye_map_0.2.0-dev_20261123_1415.scs` (zaman damgası paketten).
+
+## 32. Çekirdek büyütme (Gebze–Çayırova–Darıca 1:2) – 2026-11-23 16:40
+- `tools/geo/warp.py`: oyun koordinatında radyal çarpıtma; C=(-915,150), R1=2300 içi ×1,5 (≈1:2), dışı (K-1)·R1 dışa
+  kaydırma (sürekli). Tüm projeksiyonlar (`build_city_graph`, `clear_buildings`, `build_ground`) bundan geçer;
+  `map_export_s3.json` çekirdek binaları yüklenirken çarpıtılır. Kapatma: `SAKLAZ_WARP=0`.
+- Sonuç: 12 ilçenin hepsi güçlü bağlı ağda; C# sonrası doğrulama 39/39 depo/garaj karşılıklı erişilebilir.
+- C# düzeltmeleri: prefab origin'i uç bağlantılı iki yönlü kola konmaz (yön planı çelişkisi 56→5); iki prefab arasında
+  0,5–3 m kalan yol artık kurulur (arka arkaya otoyol katılma+çıkış prefabı; Darıca'yı koparıyordu); kurulamayan kısa
+  yol köprüsü; başarısız bağlantı günlüğü `link_fail_log.txt`; `edge_skips.json` ilk+son noktayla.
+- `fix_city_ramp_arms` kesme 36 m (C# prefab çevresini 21–28 m temizliyor; 22 m'lik parça kurulmuyordu).
+- Zemin: çekirdek ızgarası editörü "Index outside array boundaries: 12 >= 12" ile çökertti (çekirdek ızgarasının
+  tamamı birlikteyken; ikiye bölünmüş halde açılıyordu; neden bulunamadı). `build_ground.py --no-core`: büyütülen
+  bölge 12 ilçe merkezi zemini + il geneli hücreleriyle (1.446 öğe). Editör/önizleme hatasız.
+- Bina 11.630 (segment 17,4 bin: editör bütçesi). Paket `releases/saklaz_turkiye_map_0.2.0-dev_<tarih>.scs`.

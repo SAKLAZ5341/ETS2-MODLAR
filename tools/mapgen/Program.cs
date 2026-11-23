@@ -814,6 +814,9 @@ internal static class Program
         int originChanged = 0;
         {
             var kindOf = graph.GetProperty("edges").EnumerateArray().ToDictionary(x => x.GetProperty("id").GetInt32(), x => x.GetProperty("type").GetString());
+            var linkedEdges = new HashSet<int>();
+            if (graph.TryGetProperty("road_links", out var rlo))
+                foreach (var lk in rlo.EnumerateArray()) { linkedEdges.Add(lk[0].GetInt32()); linkedEdges.Add(lk[2].GetInt32()); }
             bool OneWay(string k) => k.EndsWith("_oneway") || k == "ramp_1lane";
             var byPf = attach.Where(kv => kv.Value.radius > 1f).GroupBy(kv => kv.Value.p, ReferenceEqualityComparer.Instance)
                              .ToDictionary(g => (Prefab)g.Key, g => g.ToList());
@@ -830,6 +833,9 @@ internal static class Program
                 if (arms.Count == 0) return 3;
                 var (edge, end) = arms[0].Key;
                 if (OneWay(kindOf[edge])) return end == "b" ? 2 : -10;
+                // uç bağlantısı olan iki yönlü yol origin'e bağlanırsa yönü sabitlenir → yön planı çelişkisi
+                // (tek yönlü + origin 44 bağlantı, 2026-11-23): bu kollar origin seçilmez
+                if (linkedEdges.Contains(edge)) return -5;
                 return OtherEndIsOrigin(edge, end) ? 0 : 1;
             }
             for (int pass = 0; pass < 3; pass++)
@@ -884,6 +890,7 @@ internal static class Program
         //     Origin düğümüne dokunmayan çift yönlü yol serbestçe ters kurulabilir.
         var extraFlip = new HashSet<int>();
         int linkPlanFail = 0;
+        var planWhy = new Dictionary<string, int>();
         {
             var edgeById = graph.GetProperty("edges").EnumerateArray().ToDictionary(x => x.GetProperty("id").GetInt32());
             bool OneWayKind(string k) => k.EndsWith("_oneway") || k == "ramp_1lane";
@@ -938,8 +945,9 @@ internal static class Program
                     int c = 1 ^ (lk[1].GetString() == "a" ? 1 : 0) ^ (NaturalFlip(e1) ? 1 : 0)
                               ^ (lk[3].GetString() == "a" ? 1 : 0) ^ (NaturalFlip(e2) ? 1 : 0);
                     int v1 = Var(e1), v2 = Var(e2);
-                    if (v1 == FIXED && v2 == FIXED) { if (c != 0) linkPlanFail++; continue; }
-                    if (!Union(v1, v2, c)) linkPlanFail++;
+                    string Why(int id) => OneWayKind(edgeById[id].GetProperty("type").GetString()) ? "tekyön" : (OriginEnd(id, "a") || OriginEnd(id, "b")) ? "origin" : "serbest";
+                    if (v1 == FIXED && v2 == FIXED) { if (c != 0) { linkPlanFail++; planWhy[Why(e1) + "+" + Why(e2)] = planWhy.GetValueOrDefault(Why(e1) + "+" + Why(e2)) + 1; } continue; }
+                    if (!Union(v1, v2, c)) { linkPlanFail++; planWhy["döngü " + Why(e1) + "+" + Why(e2)] = planWhy.GetValueOrDefault("döngü " + Why(e1) + "+" + Why(e2)) + 1; }
                 }
             foreach (var id in par.Keys.ToList())
             {
@@ -968,8 +976,10 @@ internal static class Program
             var seq = new List<Vector3>();
             if (hasA) seq.Add(sa.nodePos);
             foreach (var p in mid) if (seq.Count == 0 || Vector3.Distance(seq[^1], p) > 3f) seq.Add(p);
-            if (hasB) { if (seq.Count > 0 && Vector3.Distance(seq[^1], sb.nodePos) < 3f) seq.RemoveAt(seq.Count - 1); seq.Add(sb.nodePos); }
-            if (seq.Count < 2) { skippedPts.Add(e.GetProperty("pts")[0].EnumerateArray().Select(v => Math.Round(v.GetDouble(), 1)).ToArray()); skipped++; shortSkip[(hasA ? "A" : "-") + (hasB ? "B" : "-")] = shortSkip.GetValueOrDefault((hasA ? "A" : "-") + (hasB ? "B" : "-")) + 1; continue; }
+            // kenarın başı prefab düğümüyse silinmez: iki prefab arasında 0,5-3 m kalan yol da kurulur (otoyolda arka arkaya
+            // katılma+çıkış prefabı; önceden yol atlanıyor, Darıca bağlantısı kopuyordu, 2026-11-23)
+            if (hasB) { if (seq.Count > 0 && Vector3.Distance(seq[^1], sb.nodePos) < 3f && !(hasA && seq.Count == 1 && Vector3.Distance(seq[0], sb.nodePos) >= 0.5f)) seq.RemoveAt(seq.Count - 1); seq.Add(sb.nodePos); }
+            if (seq.Count < 2) { { var sp_ = e.GetProperty("pts"); skippedPts.Add(sp_[0].EnumerateArray().Concat(sp_[sp_.GetArrayLength() - 1].EnumerateArray()).Select(v => Math.Round(v.GetDouble(), 1)).ToArray()); } skipped++; shortSkip[(hasA ? "A" : "-") + (hasB ? "B" : "-")] = shortSkip.GetValueOrDefault((hasA ? "A" : "-") + (hasB ? "B" : "-")) + 1; continue; }
             // oyun sınırı: tek yol parçası ≤ 1000 m; uzun parçaları ≤ 400 m'ye böl
             for (int i = seq.Count - 1; i > 0; i--)
             {
@@ -1041,6 +1051,7 @@ internal static class Program
         int linked = 0, linkFail = 0, linkUnsafe = 0;
         var unsafeWhy = new Dictionary<string, int>();
         var rejPts = new List<double[]>();
+        var failLog = new List<string>();
         var ptsById = graph.GetProperty("edges").EnumerateArray().ToDictionary(x => x.GetProperty("id").GetInt32(), x => x.GetProperty("pts"));
         double[] EndPt((int, string) k)
         {
@@ -1051,12 +1062,34 @@ internal static class Program
         var kindById = graph.GetProperty("edges").EnumerateArray().ToDictionary(x => x.GetProperty("id").GetInt32(),
             x => x.GetProperty("type").GetString() + (x.TryGetProperty("uturn", out _) ? "(u)" : x.TryGetProperty("connector", out _) ? "(c)" : ""));
         string kindOfLink(int id) => kindById.GetValueOrDefault(id, "?");
+        // kurulamayan çok kısa yol (bölme artığı, < 3 m) iki ucundan başka yollara bağlıysa, o iki yol doğrudan birleştirilir
+        // (60 bağlantı "yol kurulmadı" diye başarısız oluyordu, 2026-11-23)
+        var linkList = new List<((int, string) k1, (int, string) k2)>();
         if (graph.TryGetProperty("road_links", out var rl))
+        {
             foreach (var lk in rl.EnumerateArray())
+                linkList.Add(((lk[0].GetInt32(), lk[1].GetString()), (lk[2].GetInt32(), lk[3].GetString())));
+            var partner = new Dictionary<(int, string), List<(int, string)>>();
+            foreach (var (x1, x2) in linkList)
             {
-                var k1 = (lk[0].GetInt32(), lk[1].GetString());
-                var k2 = (lk[2].GetInt32(), lk[3].GetString());
-                if (!roadEnds.TryGetValue(k1, out var n1) || !roadEnds.TryGetValue(k2, out var n2)) { linkFail++; continue; }
+                if (!partner.TryGetValue(x1, out var l1)) partner[x1] = l1 = new(); l1.Add(x2);
+                if (!partner.TryGetValue(x2, out var l2)) partner[x2] = l2 = new(); l2.Add(x1);
+            }
+            var bridged = new List<((int, string), (int, string))>();
+            foreach (var sid in partner.Keys.Select(k => k.Item1).Distinct().ToList())
+            {
+                if (roadEnds.ContainsKey((sid, "a")) || roadEnds.ContainsKey((sid, "b"))) continue;
+                if (partner.TryGetValue((sid, "a"), out var pa) && partner.TryGetValue((sid, "b"), out var pb) && pa.Count == 1 && pb.Count == 1
+                    && roadEnds.ContainsKey(pa[0]) && roadEnds.ContainsKey(pb[0]))
+                    bridged.Add((pa[0], pb[0]));
+            }
+            linkList.AddRange(bridged);
+            Console.WriteLine($"kısa yol köprüsü: {bridged.Count}");
+        }
+        if (linkList.Count > 0)
+            foreach (var (k1, k2) in linkList)
+            {
+                if (!roadEnds.TryGetValue(k1, out var n1) || !roadEnds.TryGetValue(k2, out var n2)) { linkFail++; failLog.Add($"{k1}-{k2} [{string.Join(",", EndPt(k1))}] yol kurulmadı"); continue; }
                 // güvenlik: bozuk geometri birleştirmesi TruckLib'de yığın taşmasıyla çöküyordu (PolylineLength, 2026-11-23):
                 // uçlar ≤ 6,5 m, birleşen yollar ≥ 3 m kalır, birleşim ≥ 105° dönüş (saç tokası) değil
                 {
@@ -1079,13 +1112,13 @@ internal static class Program
                         var dIn = Vector3.Normalize(inc.Position - io); var dOut = Vector3.Normalize(oo - outn.Position);
                         if (Vector3.Dot(dIn, dOut) < -0.25f) { bad = true; why = "saç tokası " + kindOfLink(k1.Item1) + "/" + kindOfLink(k2.Item1); }
                     }
-                    if (bad) { linkFail++; linkUnsafe++; unsafeWhy[why] = unsafeWhy.GetValueOrDefault(why) + 1; rejPts.Add(EndPt(k1)); continue; }
+                    if (bad) { linkFail++; linkUnsafe++; unsafeWhy[why] = unsafeWhy.GetValueOrDefault(why) + 1; rejPts.Add(EndPt(k1)); failLog.Add($"{k1}-{k2} [{string.Join(",", EndPt(k1))}] güvensiz {why}"); continue; }
                 }
                 try { n1.Merge(n2); linked++; }
                 catch
                 {
                     try { n2.Merge(n1); linked++; }
-                    catch (Exception ex) { linkFail++; rejPts.Add(EndPt(k1)); if (linkFail < 6) Console.WriteLine($"yol bağlantısı {k1}-{k2}: {ex.Message}"); }
+                    catch (Exception ex) { linkFail++; rejPts.Add(EndPt(k1)); failLog.Add($"{k1}-{k2} [{string.Join(",", EndPt(k1))}] {kindOfLink(k1.Item1)}/{kindOfLink(k2.Item1)}: {ex.Message}"); if (linkFail < 6) Console.WriteLine($"yol bağlantısı {k1}-{k2}: {ex.Message}"); }
                 }
             }
         {
@@ -1093,8 +1126,10 @@ internal static class Program
             var prev = File.Exists(lr) ? JsonSerializer.Deserialize<List<double[]>>(File.ReadAllText(lr)) : new List<double[]>();
             prev.AddRange(rejPts);
             File.WriteAllText(lr, JsonSerializer.Serialize(prev));
+            File.WriteAllLines(Path.Combine(Root, "data", "processed", "link_fail_log.txt"), failLog);
         }
         File.WriteAllText(Path.Combine(Root, "data", "processed", "edge_skips.json"), JsonSerializer.Serialize(skippedPts));
+        Console.WriteLine("yön planı çelişkileri: " + string.Join(", ", planWhy.OrderByDescending(x => x.Value).Select(x => $"{x.Key}={x.Value}")));
         Console.WriteLine("güvensiz bağlantı nedenleri: " + string.Join(", ", unsafeWhy.OrderByDescending(x => x.Value).Take(15).Select(x => $"{x.Key}={x.Value}")));
         Console.WriteLine($"r1↔r2 yol bağlantısı: {linked} (başarısız {linkFail}, güvensiz atlanan {linkUnsafe}, yön planı çözülemeyen {linkPlanFail}, ters kurulan {extraFlip.Count})");
         File.WriteAllText(Path.Combine(Root, "data", "processed", "junction_rejects.json"),

@@ -1,28 +1,28 @@
 {
   "scale": 3,
-  "edges": 5915,
-  "segments": 16530,
-  "graph_nodes": 13554,
+  "edges": 6582,
+  "segments": 18300,
+  "graph_nodes": 14579,
   "degree_hist": {
-    "1": 2748,
-    "2": 6524,
-    "3": 3155,
-    "4": 1007,
-    "5": 89,
-    "6": 23,
-    "7": 8
+    "1": 2766,
+    "2": 7089,
+    "3": 3509,
+    "4": 1096,
+    "5": 94,
+    "6": 20,
+    "7": 5
   },
-  "junction_candidates_city": 1225,
-  "junctions_chosen": 1609,
-  "junctions_T": 1484,
-  "junctions_X": 125,
-  "depots": 22,
+  "junction_candidates_city": 1512,
+  "junctions_chosen": 1960,
+  "junctions_T": 1813,
+  "junctions_X": 147,
+  "depots": 27,
   "depot_companies": {
     "tradeaux": 5,
-    "stokes": 4,
-    "trameri": 3,
-    "kathode": 2,
+    "stokes": 5,
+    "trameri": 4,
+    "posped": 5,
     "transinet": 4,
-    "posped": 4
+    "kathode": 4
   }
 }

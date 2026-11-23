@@ -55,6 +55,15 @@ def build(g):
         add(x, y); add(y, x)
     for l in g.get("road_links", []):
         add((l[0], l[1]), (l[2], l[3])); add((l[2], l[3]), (l[0], l[1]))
+    # C# ile aynı: kurulamayan kısa yolun iki ucundaki bağlantı ortakları doğrudan birleşir (kısa yol köprüsü)
+    partner = defaultdict(list)
+    for l in g.get("road_links", []):
+        partner[(l[0], l[1])].append((l[2], l[3]))
+        partner[(l[2], l[3])].append((l[0], l[1]))
+    for sid in skip:
+        pa, pb = partner.get((sid, "a"), []), partner.get((sid, "b"), [])
+        if len(pa) == 1 and len(pb) == 1 and pa[0][0] not in skip and pb[0][0] not in skip:
+            add(pa[0], pb[0]); add(pb[0], pa[0])
     return adj
 
 
@@ -73,8 +82,9 @@ def skipped_edges(g, path="data/processed/edge_skips.json"):
     import os
     if not os.path.exists(path):
         return set()
-    keys = {(int(round(x * 10)), int(round(z * 10))) for x, z in json.load(open(path))}
-    return {e["id"] for e in g["edges"] if (int(round(e["pts"][0][0] * 10)), int(round(e["pts"][0][1] * 10))) in keys}
+    k = lambda p: (int(round(p[0] * 10)), int(round(p[1] * 10)))
+    keys = {(k(v[0:2]), k(v[2:4])) for v in json.load(open(path)) if len(v) == 4}  # ilk + son nokta (tek uç çakışıyordu)
+    return {e["id"] for e in g["edges"] if (k(e["pts"][0]), k(e["pts"][-1])) in keys}
 
 
 def main(path):

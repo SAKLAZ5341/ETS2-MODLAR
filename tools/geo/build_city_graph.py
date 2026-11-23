@@ -30,6 +30,8 @@ RAW = ROOT / "data" / "raw"
 CFG = json.loads((ROOT / "config" / "aoi.json").read_text(encoding="utf-8"))
 T = Transformer.from_crs("EPSG:4326", "EPSG:32635", always_xy=True)
 E0, N0 = 705139.33, 4519475.38  # Gebze OSM düğümü 26505108
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import warp as WARP  # noqa: E402  çekirdek büyütme
 
 ROADMAP = {
     "motorway": ("hw3_divided", 1), "trunk": ("hw3_divided", 2), "primary": ("r2_divided", 3),
@@ -188,7 +190,7 @@ def main() -> None:
             use[p] += 2 if i in (0, len(pts) - 1) else 1  # uçlar her zaman bölme noktası
 
     # 2) kesişimlerden böl, çekirdek alana kırp, sadeleştir
-    g = lambda x, y: (round((x - E0) / S, 3), round(-(y - N0) / S, 3))
+    g = lambda x, y: tuple(round(v, 3) for v in WARP.proj(x, y, E0, N0, S))
     edges, node_id, nodes = [], {}, []
     from shapely.prepared import prep
     region_prep = prep(region_prov)
@@ -1054,7 +1056,7 @@ def link_through(edges, junctions, jnodes, arm_dir):
 def load_city_polys(S):
     """İlçe poligonları (OSM admin_level 6), oyun koordinatında: {token: (ad, poligon)}."""
     from shapely.ops import polygonize, unary_union
-    g = lambda x, y: ((x - E0) / S, -(y - N0) / S)
+    g = lambda x, y: WARP.proj(x, y, E0, N0, S)
     polys = {}
     src = RAW / "kocaeli" / "districts.json"
     if not src.exists():
@@ -1152,7 +1154,7 @@ def assign_cities(depots, edges, S):
             if c["name"] in cen:
                 la, lo = cen[c["name"]]
                 x, y = T.transform(lo, la)
-                c["center"] = [round((x - E0) / S, 1), round(-(y - N0) / S, 1)]
+                c["center"] = [round(v, 1) for v in WARP.proj(x, y, E0, N0, S)]
     rects = city_grid(edges, S)
     for d in depots:
         d["city"] = grid_city(rects, d["body"])
@@ -1186,7 +1188,7 @@ def place_depots(edges, chosen, S, a, per_city=3, min_gap=250.0, links=(), allow
     from shapely.geometry import Point, Polygon
     from shapely.strtree import STRtree
 
-    g = lambda x, y: ((x - E0) / S, -(y - N0) / S)
+    g = lambda x, y: WARP.proj(x, y, E0, N0, S)
     inds, lu_seen = [], set()
     lu = json.loads((RAW / "landuse.json").read_text(encoding="utf-8"))["elements"]
     if (RAW / "kocaeli" / "landuse.json").exists():
@@ -2470,7 +2472,7 @@ def uturn_links(edges, junctions, links, reach=120.0, skip_boxes=()):
     print(f"dönüş bağlantısı: {made} (boşta biten {len(outs)}, boşta başlayan {len(ins)} tek yönlü uç)")
 
 
-def fix_city_ramp_arms(edges, chosen, others, links, cut_at=22.0):
+def fix_city_ramp_arms(edges, chosen, others, links, cut_at=36.0):  # C# prefab çevresini ~21-28 m temizliyor
     """Şehir kavşağı prefabının kolu tek yönlü rampa olamaz: oyun "[traffic] Unable to determine output road lane ...
     Failed to register Prefab item" verip kavşağı trafikten çıkarıyordu (önizleme logu, 2026-11-23). Rampanın kavşak
     tarafındaki ilk cut_at m'si iki yönlü şehir yoluna çevrilir; kalan rampa bu parçaya yol-yol bağlantısıyla eklenir."""
@@ -2836,7 +2838,7 @@ def place_signs(edges, items, cities, S, main_edges, max_place=650):
     # 2) mahalle / köy adları (OSM place=suburb/neighbourhood/quarter/village): en yakın iki yönlü yolun kenarına
     lines = [LineString(e["pts"]) for e in TW]
     tree = STRtree(lines)
-    g = lambda x, y: ((x - E0) / S, -(y - N0) / S)
+    g = lambda x, y: WARP.proj(x, y, E0, N0, S)
     seen, places = set(), []
     for f in (RAW / "places.json", RAW / "kocaeli" / "places.json"):
         if not f.exists():
