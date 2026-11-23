@@ -914,6 +914,7 @@ internal static class Program
                     fixedE.Add(e1); fixedE.Add(e2);
                 }
         }
+        var skippedPts = new List<double[]>();
         int roads = 0, segs = 0, skipped = 0, connected = 0, failed = 0, reversedAtOrigin = 0, originUnattached = 0;
         foreach (var e in graph.GetProperty("edges").EnumerateArray().OrderBy(e => e.GetProperty("prio").GetInt32()))
         {
@@ -934,7 +935,7 @@ internal static class Program
             if (hasA) seq.Add(sa.nodePos);
             foreach (var p in mid) if (seq.Count == 0 || Vector3.Distance(seq[^1], p) > 3f) seq.Add(p);
             if (hasB) { if (seq.Count > 0 && Vector3.Distance(seq[^1], sb.nodePos) < 3f) seq.RemoveAt(seq.Count - 1); seq.Add(sb.nodePos); }
-            if (seq.Count < 2) { skipped++; shortSkip[(hasA ? "A" : "-") + (hasB ? "B" : "-")] = shortSkip.GetValueOrDefault((hasA ? "A" : "-") + (hasB ? "B" : "-")) + 1; continue; }
+            if (seq.Count < 2) { skippedPts.Add(e.GetProperty("pts")[0].EnumerateArray().Select(v => Math.Round(v.GetDouble(), 1)).ToArray()); skipped++; shortSkip[(hasA ? "A" : "-") + (hasB ? "B" : "-")] = shortSkip.GetValueOrDefault((hasA ? "A" : "-") + (hasB ? "B" : "-")) + 1; continue; }
             // oyun sınırı: tek yol parçası ≤ 1000 m; uzun parçaları ≤ 400 m'ye böl
             for (int i = seq.Count - 1; i > 0; i--)
             {
@@ -1003,21 +1004,65 @@ internal static class Program
         }
 
         // 2b) farklı görünümlü yolların (r1↔r2) düz geçişleri: uç düğümlerini birleştir
-        int linked = 0, linkFail = 0;
+        int linked = 0, linkFail = 0, linkUnsafe = 0;
+        var unsafeWhy = new Dictionary<string, int>();
+        var rejPts = new List<double[]>();
+        var ptsById = graph.GetProperty("edges").EnumerateArray().ToDictionary(x => x.GetProperty("id").GetInt32(), x => x.GetProperty("pts"));
+        double[] EndPt((int, string) k)
+        {
+            var ps = ptsById[k.Item1];
+            var q = k.Item2 == "a" ? ps[0] : ps[ps.GetArrayLength() - 1];
+            return new[] { Math.Round(q[0].GetDouble(), 1), Math.Round(q[1].GetDouble(), 1) };
+        }
+        var kindById = graph.GetProperty("edges").EnumerateArray().ToDictionary(x => x.GetProperty("id").GetInt32(),
+            x => x.GetProperty("type").GetString() + (x.TryGetProperty("uturn", out _) ? "(u)" : x.TryGetProperty("connector", out _) ? "(c)" : ""));
+        string kindOfLink(int id) => kindById.GetValueOrDefault(id, "?");
         if (graph.TryGetProperty("road_links", out var rl))
             foreach (var lk in rl.EnumerateArray())
             {
                 var k1 = (lk[0].GetInt32(), lk[1].GetString());
                 var k2 = (lk[2].GetInt32(), lk[3].GetString());
                 if (!roadEnds.TryGetValue(k1, out var n1) || !roadEnds.TryGetValue(k2, out var n2)) { linkFail++; continue; }
+                // güvenlik: bozuk geometri birleştirmesi TruckLib'de yığın taşmasıyla çöküyordu (PolylineLength, 2026-11-23):
+                // uçlar ≤ 6,5 m, birleşen yollar ≥ 3 m kalır, birleşim ≥ 105° dönüş (saç tokası) değil
+                {
+                    static (Vector3 other, bool incoming)? Info(INode n)
+                    {
+                        if (n.BackwardItem is Road rb) return (rb.Node.Position, true);
+                        if (n.ForwardItem is Road rf) return (rf.ForwardNode.Position, false);
+                        return null;
+                    }
+                    var i1 = Info(n1); var i2 = Info(n2);
+                    float dd = Vector3.Distance(n1.Position, n2.Position);
+                    string why = i1 == null || i2 == null ? "uç yok" : dd > 6.5f ? "uzak" :
+                        (Vector3.Distance(i1.Value.other, n2.Position) < 3f || Vector3.Distance(i2.Value.other, n1.Position) < 3f
+                         || Vector3.Distance(i1.Value.other, n1.Position) < 3f || Vector3.Distance(i2.Value.other, n2.Position) < 3f) ? "kısa" : null;
+                    bool bad = why != null;
+                    if (!bad && i1.Value.incoming != i2.Value.incoming)
+                    {
+                        var (inc, outn) = i1.Value.incoming ? (n1, n2) : (n2, n1);
+                        var (io, oo) = i1.Value.incoming ? (i1.Value.other, i2.Value.other) : (i2.Value.other, i1.Value.other);
+                        var dIn = Vector3.Normalize(inc.Position - io); var dOut = Vector3.Normalize(oo - outn.Position);
+                        if (Vector3.Dot(dIn, dOut) < -0.25f) { bad = true; why = "saç tokası " + kindOfLink(k1.Item1) + "/" + kindOfLink(k2.Item1); }
+                    }
+                    if (bad) { linkFail++; linkUnsafe++; unsafeWhy[why] = unsafeWhy.GetValueOrDefault(why) + 1; rejPts.Add(EndPt(k1)); continue; }
+                }
                 try { n1.Merge(n2); linked++; }
                 catch
                 {
                     try { n2.Merge(n1); linked++; }
-                    catch (Exception ex) { linkFail++; if (linkFail < 6) Console.WriteLine($"yol bağlantısı {k1}-{k2}: {ex.Message}"); }
+                    catch (Exception ex) { linkFail++; rejPts.Add(EndPt(k1)); if (linkFail < 6) Console.WriteLine($"yol bağlantısı {k1}-{k2}: {ex.Message}"); }
                 }
             }
-        Console.WriteLine($"r1↔r2 yol bağlantısı: {linked} (başarısız {linkFail}, yön planı çözülemeyen {linkPlanFail}, ters kurulan {extraFlip.Count})");
+        {
+            var lr = Path.Combine(Root, "data", "processed", "link_rejects.json");
+            var prev = File.Exists(lr) ? JsonSerializer.Deserialize<List<double[]>>(File.ReadAllText(lr)) : new List<double[]>();
+            prev.AddRange(rejPts);
+            File.WriteAllText(lr, JsonSerializer.Serialize(prev));
+        }
+        File.WriteAllText(Path.Combine(Root, "data", "processed", "edge_skips.json"), JsonSerializer.Serialize(skippedPts));
+        Console.WriteLine("güvensiz bağlantı nedenleri: " + string.Join(", ", unsafeWhy.OrderByDescending(x => x.Value).Take(15).Select(x => $"{x.Key}={x.Value}")));
+        Console.WriteLine($"r1↔r2 yol bağlantısı: {linked} (başarısız {linkFail}, güvensiz atlanan {linkUnsafe}, yön planı çözülemeyen {linkPlanFail}, ters kurulan {extraFlip.Count})");
         File.WriteAllText(Path.Combine(Root, "data", "processed", "junction_rejects.json"),
             JsonSerializer.Serialize(rejectedNodes.Distinct().OrderBy(x => x)));
         Console.WriteLine($"reddedilen kavşak düğümleri yazıldı: {rejectedNodes.Count} (data/processed/junction_rejects.json)");

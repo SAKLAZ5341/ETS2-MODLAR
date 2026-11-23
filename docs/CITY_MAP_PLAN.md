@@ -398,3 +398,19 @@ Paket `releases/saklaz_turkiye_map_0.2.0-dev_20261122_1414.scs`.
   mahalle/köy adı (`dlc_blke_439`/`sign_templ.tr_150`). Tabela trafik yönünün sağında, +Z gelen sürücüye bakar.
 - Önizleme logu temiz. Paket `releases/saklaz_turkiye_map_0.2.0-dev_20261123_0848.scs`.
 - Kalan: Darıca ve Karamürsel'in şehir içi ağı ana ağa bağlı değil (Darıca'da sokaklar prefab sığmadığı için siliniyor).
+
+## 29. Yönlü bağlantı ve oyunla birebir doğrulama – 2026-11-23 11:30
+- Yönlü denetim (`tools/validation/directed.py`): oyun rotayı tek yönlü rampa/şerit yönüne göre arar. Sabah sürümünde
+  depo/garajların yalnız 13/30'u karşılıklı erişilebiliyordu (HQ'da iş/rota sorunu riski). Depo ve garaj artık yalnız
+  en büyük güçlü bağlı ağa (`largest_scc`) konur.
+- Yeni onarımlar (`build_city_graph.py`): T kopukluğu (`force_tees`, çıkmaz ucu 60 m'ye kadar uzatma), şehir yolu–otoyol
+  şeridi yarım elmas (`force_hw_tees`, `lane_access`), bağlantı yolları (`add_connectors`, `ramp_access`), dönüş
+  bağlantıları (`uturn_links`, Bezier, ≤35°/5 m), şehir kavşağına giren rampanın ilk 22 m'si iki yönlü
+  (`fix_city_ramp_arms`; oyun "[traffic] Failed to register Prefab item" veriyordu).
+- C#: uç birleştirmede güvenlik denetimi (saç tokası birleşimi TruckLib'de yığın taşmasıyla çöküyordu); başarısız
+  birleşimler `link_rejects.json`, kurulamayan kısa kenarlar `edge_skips.json` → Python süzgeci (`filter_links`) ve
+  yönlü denetim bunları sonraki derlemede hesaba katar (oyunla birebir).
+- Sonuç: HQ/garaj 7 ilçe (Gebze, İzmit, Kandıra, Körfez, Derince, Dilovası, Kartepe), 22/22 depo/garaj karşılıklı
+  erişilebilir. Kalan: Çayırova, Darıca, Gölcük, Karamürsel, Başiskele güçlü bağlı ağın dışında (C#'ın uygulayamadığı
+  bağlantılar çıkarılınca). 10 kısa rampalı şehir kavşağında trafik log uyarısı (çökme değil).
+- Önizleme: harita/şirket hatası yok. Paket `releases/saklaz_turkiye_map_0.2.0-dev_20261123_1130.scs`.

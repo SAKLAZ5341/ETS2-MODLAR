@@ -115,6 +115,7 @@ def main() -> None:
     ap.add_argument("--no-collapse", action="store_true", help="bölünmüş caddeleri tek hatta indirgeme")
     ap.add_argument("--core-only", action="store_true", help="yalnız Gebze/Darıca/Çayırova/Dilovası çekirdeği")
     ap.add_argument("--cluster-len", type=float, default=22.0, help="bu uzunluktan kısa kesişim-kesişim parçası daraltılır (oyun m)")
+    ap.add_argument("--pick-len", type=float, default=0.0, help="prefabı engelleyen ana yol kolu bu uzunluktan kısaysa kaldırılır")
     ap.add_argument("--max-angle", type=float, default=65.0, help="kavşak prefabı kol açı hatası üst sınırı (derece; C# mapping 70)")
     ap.add_argument("--connect-iters", type=int, default=12, help="bağlanamayan kesişimlerde sokak kaldırma turu")
     ap.add_argument("--tertiary-radius", type=float, default=3000.0, help="il geneli tertiary: merkeze en çok (gerçek m)")
@@ -501,7 +502,7 @@ def main() -> None:
             minor = [ed for ed, _ in inc[k] if ed["prio"] >= 7 and ed["id"] not in rm]
             if minor:
                 rm.add(max(minor, key=lambda e: (e["prio"], -e["len"]))["id"])
-            elif k in PICK and _it >= 2 and edges[PICK[k]]["len"] < 150:
+            elif k in PICK and _it >= 2 and edges[PICK[k]]["len"] < a.pick_len:
                 rm.add(PICK[k])
                 main_rm[0] += 1
         print(f"  bağlantı turu {_it + 1}: kavşak {len(chosen)}, prefabsız kesişim {len(blocked)}, kaldırılan sokak {len(rm)}")
@@ -767,6 +768,12 @@ def main() -> None:
         j["id"] = i
     chosen = keep_j
     print(f"şehir kavşağındaki rampa: {conv} iki yönlü yola çevrildi, {dropj} kavşakta otoyol rampası tek yönlü kaldı")
+    edges, chosen = force_tees(edges, chosen, hwj + forks, road_links, a)
+    edges = force_hw_tees(edges, chosen, hwj, forks, road_links, a)
+    road_links[:] = heal_links(edges, chosen + hwj + forks, road_links)
+    if add_connectors(edges, chosen + hwj + forks, road_links):
+        edges, chosen = force_tees(edges, chosen, hwj + forks, road_links, a)
+        edges = force_hw_tees(edges, chosen, hwj, forks, road_links, a)
     meta = {"scale_divisor": S, "origin_osm_node": 26505108, "axes": "+X doğu, +Z güney, Y=0",
             "prefab_radius": a.prefab_radius, "attribution": "(c) OpenStreetMap contributors, ODbL 1.0"}
     dst = ROOT / "data" / "processed" / f"map_graph_s{S:g}.json"
@@ -781,7 +788,65 @@ def main() -> None:
     #    SON ağın en büyük bağlı bileşenine konur → her HQ şehrinden diğer şehirlerin depolarına rota (ilk iş) bulunur.
     #    (Aksi halde yeni profilde "No valid offers found for player's HQ city" → oyun kapanıyordu, 2026-11-22.)
     road_links = heal_links(edges, chosen + hwj + forks, road_links)
-    main_edges = main_component(edges, chosen + hwj + forks, road_links)
+    # ilçe ağlarının rampa erişimi dönüş bağlantılarından önce (boşta rampa uçlarını önce şehirler alsın)
+    sys.path.insert(0, str(ROOT / "tools" / "validation"))
+    from directed import largest_scc
+    _scc0 = largest_scc({"edges": edges, "junctions": chosen, "hw_junctions": hwj, "ramp_forks": forks,
+                         "road_links": road_links})
+    if ramp_access(edges, chosen, hwj, forks, road_links, _scc0, lane_based=True):
+        edges, chosen = force_tees(edges, chosen, hwj + forks, road_links, a)
+        road_links = heal_links(edges, chosen + hwj + forks, road_links)
+    # Dönüş bağlantıları (uturn) boşta rampa uçlarını tüketir; SCC'ye giremeyen ilçelerin (Darıca) erişimi için o
+    # ilçelerin alanındaki uçlar önce ilçe erişimine ayrılır. Hangi ilçeler: kopya üzerinde deneme turu.
+    import copy
+    areas = city_grid(edges, S)
+
+    def _city_at(p):
+        for b in areas:
+            if b["x0"] <= p[0] <= b["x1"] and b["z0"] <= p[1] <= b["z1"]:
+                return b["token"]
+    _e, _l = copy.deepcopy(edges), copy.deepcopy(road_links)
+    uturn_links(_e, chosen + hwj + forks, _l)
+    _s = largest_scc({"edges": _e, "junctions": chosen, "hw_junctions": hwj, "ramp_forks": forks, "road_links": _l})
+    have = Counter(_city_at(e["pts"][len(e["pts"]) // 2]) for e in _e if e["id"] in _s and e["type"] in CITY)
+    lacking = [t for t in CITY_TOKENS.values() if have[t] < 20]
+    print(f"SCC'de yolu az ilçe (deneme): {lacking}")
+    skip = [{"x0": b["x0"] - 800, "x1": b["x1"] + 800, "z0": b["z0"] - 800, "z1": b["z1"] + 800}
+            for b in areas if b["token"] in lacking]
+    uturn_links(edges, chosen + hwj + forks, road_links, skip_boxes=skip)
+    if lacking:
+        _scc = largest_scc({"edges": edges, "junctions": chosen, "hw_junctions": hwj, "ramp_forks": forks,
+                            "road_links": road_links})
+        if ramp_access(edges, chosen, hwj, forks, road_links, _scc, min_group=2000.0):
+            edges, chosen = force_tees(edges, chosen, hwj + forks, road_links, a)
+            road_links = heal_links(edges, chosen + hwj + forks, road_links)
+    # Oyun rotayı yönlü arar: depo/garaj yalnız her noktasından her noktasına gidilip dönülebilen en büyük güçlü
+    # bağlı ağa konur (yalnız yönsüz bağlı ağda tek yönlü rampa tuzakları vardı, 2026-11-23).
+    sys.path.insert(0, str(ROOT / "tools" / "validation"))
+    from directed import largest_scc
+    fix_city_ramp_arms(edges, chosen, hwj + forks, road_links)
+    filter_links(edges, road_links)
+    main_edges = largest_scc({"edges": edges, "junctions": chosen, "hw_junctions": hwj, "ramp_forks": forks,
+                              "road_links": road_links})
+    for _ in range(3):  # güçlü bağlı ağın dışında kalan büyük ilçe ağlarını iki yönlü bağlantı yoluyla bağla
+        n1 = add_connectors(edges, chosen + hwj + forks, road_links, min_comp=4000.0, targets=main_edges)
+        n2 = lane_access(edges, chosen, hwj, forks, road_links, a, main_edges, None)
+        n3 = ramp_access(edges, chosen, hwj, forks, road_links, main_edges)
+        if not n1 and not n2 and not n3:
+            break
+        edges, chosen = force_tees(edges, chosen, hwj + forks, road_links, a)
+        if n2:  # yeni otoyol prefabları: şerit sayıları yeniden eşlenir (hi/lo)
+            dst.write_text(json.dumps({"meta": meta, "edges": edges, "junctions": chosen, "hw_junctions": hwj,
+                                       "ramp_forks": forks, "road_links": road_links}, ensure_ascii=False), encoding="utf-8")
+            assign_hw_lanes.main(str(dst))
+            gl = json.loads(dst.read_text(encoding="utf-8"))
+            edges, hwj = gl["edges"], gl["hw_junctions"]
+        road_links = heal_links(edges, chosen + hwj + forks, road_links)
+        uturn_links(edges, chosen + hwj + forks, road_links)
+        fix_city_ramp_arms(edges, chosen, hwj + forks, road_links)
+        filter_links(edges, road_links)
+        main_edges = largest_scc({"edges": edges, "junctions": chosen, "hw_junctions": hwj, "ramp_forks": forks,
+                                  "road_links": road_links})
     print(f"ana bağlı ağ: {len(main_edges)}/{len(edges)} kenar, "
           f"%{100 * sum(e['len'] for e in edges if e['id'] in main_edges) / sum(e['len'] for e in edges):.1f} uzunluk")
     depots = place_depots(edges, chosen, S, a, links=road_links, allowed=main_edges)
@@ -1223,6 +1288,1132 @@ def place_depots(edges, chosen, S, a, per_city=3, min_gap=250.0, links=(), allow
     return out
 
 
+def comp_finder(edges, junctions, links):
+    par = {}
+
+    def f(x):
+        par.setdefault(x, x)
+        while par[x] != x:
+            par[x] = par[par[x]]
+            x = par[x]
+        return x
+    for j in junctions:
+        for arm in j["arms"]:
+            ra, rb = f(("e", arm["edge"])), f(("j", id(j)))
+            if ra != rb:
+                par[ra] = rb
+    for l in links:
+        ra, rb = f(("e", l[0])), f(("e", l[2]))
+        if ra != rb:
+            par[ra] = rb
+    return lambda eid: f(("e", eid))
+
+
+def ramp_access(edges, chosen, hwj, forks, links, targets, min_group=4000.0, reach_m=450.0, lane_based=False):
+    """Güçlü bağlı ağın dışında kalan büyük şehir ağı için yönlü eksik tamamlama: gruptan ağa çıkış yoksa boşta
+    BAŞLAYAN ve ağa ulaşan bir katılma rampasına, ağdan gruba giriş yoksa boşta BİTEN ve ağdan gelinen bir çıkış
+    rampasına kısa bağlantı yolu (gruptaki yolda T, rampa ucunda uç bağlantısı). Başka yolu kesmez (Darıca, 2026-11-23)."""
+    from shapely.geometry import Point
+    from shapely.strtree import STRtree
+    sys.path.insert(0, str(ROOT / "tools" / "validation"))
+    from directed import build, reach
+    allj = chosen + hwj + forks
+    g = {"edges": edges, "junctions": chosen, "hw_junctions": hwj, "ramp_forks": forks, "road_links": links}
+    adj = build(g)
+    radj = defaultdict(set)
+    for u, vs in adj.items():
+        for v in vs:
+            radj[v].add(u)
+    Sn = {(i, x) for i in targets for x in "ab"}
+    ref = next(iter(Sn))
+    if lane_based:  # ilk tur: herhangi bir otoyol şeridine ulaşan / şeritten gelinen (dönüşler sonra kurulur)
+        src = [(e["id"], x) for e in edges if e["type"].startswith("hw") and e["type"].endswith("_oneway") for x in "ab"]
+
+        def multi(gr):
+            seen, q = set(src), list(src)
+            while q:
+                u = q.pop()
+                for v in gr[u]:
+                    if v not in seen:
+                        seen.add(v); q.append(v)
+            return seen
+        toS, fromS = multi(radj), multi(adj)
+    else:
+        toS = reach(radj, ref)    # buradan S'ye gidilebilen düğümler
+        fromS = reach(adj, ref)   # S'den gidilebilen düğümler
+    nt = {e["id"] for e in edges if e["id"] not in targets}
+    sub_j = [{"arms": [x for x in j["arms"] if x["edge"] in nt]} for j in allj]
+    comp = comp_finder(edges, sub_j, [l for l in links if l[0] in nt and l[2] in nt])
+    glen = Counter()
+    for e in edges:
+        if e["id"] in nt:
+            glen[comp(e["id"])] += e["len"]
+    used = {(x["edge"], x["end"]) for j in allj for x in j["arms"]}
+    used |= {(l[0], l[1]) for l in links} | {(l[2], l[3]) for l in links}
+    centers = [(j["x"], j["z"]) for j in allj]
+    bad = [e for e in edges if len(e["pts"]) < 2]
+    if bad:
+        print("HATA tek noktalı kenar:", [(e["id"], e["type"], e.get("connector"), e.get("uturn"), e["pts"]) for e in bad[:5]])
+    allines = [LineString(e["pts"]) for e in edges]
+    atree = STRtree(allines)
+    pt = lambda e, end: tuple(e["pts"][0] if end == "a" else e["pts"][-1])
+    dead_in = [(e, "a") for e in edges if e["type"] == "ramp_1lane" and not e.get("reverse")
+               and (e["id"], "a") not in used and (e["id"], "a") in toS]
+    dead_out = [(e, "b") for e in edges if e["type"] == "ramp_1lane" and not e.get("reverse")
+                and (e["id"], "b") not in used and (e["id"], "b") in fromS]
+    made = 0
+    for g_, L in glen.most_common():
+        if L < min_group:
+            break
+        gnodes = [(e["id"], x) for e in edges if e["id"] in nt and comp(e["id"]) == g_ for x in "ab"]
+        has_out = any(n in toS for n in gnodes)
+        has_in = any(n in fromS for n in gnodes)
+        tw = [e for e in edges if e["id"] in nt and comp(e["id"]) == g_ and (e["type"] in CITY or e["type"] in R2)]
+        if not tw:
+            continue
+        lines = [LineString(e["pts"]) for e in tw]
+        tree = STRtree(lines)
+        for need_dir, pool in (("out", dead_in), ("in", dead_out)):
+            if (need_dir == "out" and has_out) or (need_dir == "in" and has_in):
+                continue
+            best = None
+            for r, rend in pool:
+                Q = pt(r, rend)
+                for i in tree.query(Point(Q).buffer(reach_m)):
+                    ln = lines[i]
+                    e = tw[i]
+                    s_ = ln.project(Point(Q))
+                    na = (23.5 if e["type"] in R2 else 18.5) + (22.0 if (e["id"], "a") in used else 4.0)
+                    nb = (23.5 if e["type"] in R2 else 18.5) + (22.0 if (e["id"], "b") in used else 4.0)
+                    s_ = min(max(s_, na), ln.length - nb)
+                    if s_ < na:
+                        continue
+                    P = ln.interpolate(s_)
+                    P = (P.x, P.y)
+                    d = math.dist(P, Q)
+                    if d < 25 or d > reach_m or (best and d >= best[0]):
+                        continue
+                    if any(math.dist(P, q) < 45 for q in centers):
+                        continue
+                    seg = LineString([P, Q])
+                    if any(edges[q]["id"] not in (e["id"], r["id"]) and allines[q].intersects(seg)
+                           and allines[q].distance(Point(P)) > 1 and allines[q].distance(Point(Q)) > 1
+                           for q in atree.query(seg)):
+                        continue
+                    best = (d, P, Q, r["id"], rend, e["id"])
+            if not best:
+                print(f"  rampa erişimi ({need_dir}) bulunamadı: grup {L / 1000:.1f} km")
+                continue
+            d, P, Q, rid, rend, eid = best
+            ux, uz = (Q[0] - P[0]) / d, (Q[1] - P[1]) / d
+            a_ = (P[0] + ux * 1.5, P[1] + uz * 1.5)
+            n0 = max(max(x["a"], x["b"]) for x in edges) + 1
+            Rr = next(x for x in edges if x["id"] == rid)
+            rt = end_tangent(Rr, rend)
+            # P→Q yönünde Q'daki teğet: rampaya giriş (a) → rampa yönü; rampadan çıkış (b) → rampa yönünün tersi
+            tQ = rt if rend == "a" else (-rt[0], -rt[1])
+            npts = bezier_pts(a_, (ux, uz), Q, tQ)
+            edges.append({"id": len(edges), "osm": 0, "hw": "tertiary", "type": "r1_city", "prio": 6, "oneway": False,
+                          "reverse": False, "a": n0, "b": n0 + 1, "pts": npts,
+                          "len": round(sum(math.dist(p_, q_) for p_, q_ in zip(npts, npts[1:])), 1), "connector": True})
+            links.append([len(edges) - 1, "b", rid, rend])
+            used |= {(rid, rend), (len(edges) - 1, "b")}
+            centers.append(P)
+            dead_in = [x for x in dead_in if x[0]["id"] != rid]
+            dead_out = [x for x in dead_out if x[0]["id"] != rid]
+            made += 1
+            print(f"  rampa erişimi ({need_dir}): grup {L / 1000:.1f} km, {d:.0f} m, {[round(v) for v in P]}")
+    return made
+
+
+def lane_access(edges, chosen, hwj, forks, links, a, targets, cities, min_group=4000.0):
+    """Güçlü bağlı ağın dışında kalan büyük şehir ağı (Darıca: D-100 şeritlerine 20-40 m paralel yan yol) için yan yol
+    üzerine X kavşak + aynı şeritte çıkış (s-25) ve katılma (s+25) rampaları: ilçeye hem girilir hem çıkılır."""
+    from shapely.geometry import Point
+    from shapely.strtree import STRtree
+    PL = a.hw_prefab_len
+    allj = chosen + hwj + forks
+    nt = {e["id"] for e in edges if e["id"] not in targets}
+    sub_j = [{"arms": [x for x in j["arms"] if x["edge"] in nt]} for j in allj]
+    comp = comp_finder(edges, sub_j, [l for l in links if l[0] in nt and l[2] in nt])
+    glen = Counter()
+    for e in edges:
+        if e["id"] in nt:
+            glen[comp(e["id"])] += e["len"]
+    used = {(x["edge"], x["end"]) for j in allj for x in j["arms"]}
+    centers = [(j["x"], j["z"]) for j in allj]
+    lanes = [e for e in edges if e["id"] in targets and e["type"].startswith("hw") and e["type"].endswith("_oneway")
+             and not e.get("reverse") and e["len"] > 2 * PL + 70]
+    if not lanes:
+        return 0
+    llines = [LineString(e["pts"]) for e in lanes]
+    ltree = STRtree(llines)
+    allines = [LineString(e["pts"]) for e in edges]
+    atree = STRtree(allines)
+    made, touched = 0, set()
+    for g_, L in glen.most_common():
+        if L < min_group:
+            break
+        best = None
+        LD = Counter()
+        for e in edges:
+            if e["id"] not in nt or comp(e["id"]) != g_ or e["id"] in touched:
+                continue
+            LD["tip " + e["type"]] += 1
+            if not (e["type"] in CITY or e["type"] in R2) or e["type"] in R2:
+                continue
+            ln = LineString(e["pts"])
+            need_a = 18.5 + (22.0 if (e["id"], "a") in used else 4.0)
+            need_b = 18.5 + (22.0 if (e["id"], "b") in used else 4.0)
+            d0 = need_a
+            while d0 <= ln.length - need_b:
+                J = ln.interpolate(d0)
+                Jp = (J.x, J.y)
+                d0 += 10.0
+                if any(math.dist(Jp, q) < 45 for q in centers):
+                    LD["J prefab yakın"] += 1
+                    continue
+                for i in ltree.query(J.buffer(70)):
+                    if lanes[i]["id"] in touched:
+                        continue  # bu çağrıda bölündü (geometri eski)
+                    hl = llines[i]
+                    dl = hl.distance(J)
+                    if dl < 18 or dl > 70:
+                        LD["şerit uzaklığı"] += 1
+                        continue
+                    LD["aday"] += 1
+                    s_ = hl.project(J)
+                    se_, sm_ = s_ - 30.0, s_ + 30.0
+                    if se_ < PL + 6 or hl.length - sm_ < PL + 6:
+                        LD["şerit kısa"] += 1
+                        continue
+                    ce = (hl.interpolate(se_).x, hl.interpolate(se_).y)
+                    cm = (hl.interpolate(sm_).x, hl.interpolate(sm_).y)
+                    if any(math.dist(z, q) < PL + 15 for q in centers for z in (ce, cm)):
+                        LD["şeritte prefab yakın"] += 1
+                        continue
+                    A1, A2 = hl.interpolate(s_ - 5), hl.interpolate(s_ + 5)
+                    tl = math.dist((A1.x, A1.y), (A2.x, A2.y)) or 1
+                    tx, tz = (A2.x - A1.x) / tl, (A2.y - A1.y) / tl
+                    if (Jp[0] - A1.x) * (-tz) + (Jp[1] - A1.y) * tx < 10:
+                        LD["solda"] += 1
+                        continue  # yan yol şeridin sağında olmalı
+                    bad = False
+                    for seg in (LineString([ce, Jp]), LineString([Jp, cm])):
+                        for q in atree.query(seg):
+                            if edges[q]["id"] in (e["id"], lanes[i]["id"]):
+                                continue
+                            if allines[q].intersects(seg) and allines[q].distance(Point(Jp)) > 1 and \
+                                    allines[q].distance(Point(ce)) > 1 and allines[q].distance(Point(cm)) > 1:
+                                bad = True
+                    if bad:
+                        LD["kesişiyor"] += 1
+                        continue
+                    score = dl
+                    if best is None or score < best[0]:
+                        best = (score, e["id"], d0 - 10.0, Jp, i, se_, sm_, ce, cm, (tx, tz))
+        if not best:
+            print(f"  şerit erişimi bulunamadı: grup {L / 1000:.1f} km {dict(LD) if L > 25000 else ''}")
+            continue
+        _, eid, dJ, Jp, i, se_, sm_, ce, cm, (tx, tz) = best
+        E = {x["id"]: x for x in edges}
+        e = E[eid]
+        h = lanes[i]
+
+        def split_edge(hh, cut):
+            hp = hh["pts"]
+            sc = LineString(hp).project(Point(cut))
+            acc_, kk = 0.0, 0
+            while kk < len(hp) - 1 and acc_ + math.dist(hp[kk], hp[kk + 1]) < sc:
+                acc_ += math.dist(hp[kk], hp[kk + 1])
+                kk += 1
+            Ap = [list(q) for q in hp[:kk + 1]] + [list(cut)]
+            Bp = [list(cut)] + [list(q) for q in hp[kk + 1:]]
+            if len(Ap) > 2 and math.dist(Ap[-2], cut) < 0.5:
+                Ap.pop(-2)
+            if len(Bp) > 2 and math.dist(Bp[1], cut) < 0.5:
+                Bp.pop(1)
+            nn = max(max(x["a"], x["b"]) for x in edges) + 1
+            Bn = dict(hh, id=len(edges), a=nn, pts=Bp)
+            Bn["b"] = hh["b"]
+            hh["pts"], hh["b"] = Ap, nn
+            for e2 in (hh, Bn):
+                e2["len"] = round(sum(math.dist(p_, q_) for p_, q_ in zip(e2["pts"], e2["pts"][1:])), 1)
+            for j in allj:
+                for x in j["arms"]:
+                    if x["edge"] == hh["id"] and x["end"] == "b":
+                        x["edge"] = Bn["id"]
+            for lk in links:
+                for q_ in (0, 2):
+                    if lk[q_] == hh["id"] and lk[q_ + 1] == "b":
+                        lk[q_] = Bn["id"]
+            edges.append(Bn)
+            if "_id_targets" in hh:
+                pass
+            return Bn, nn
+        Bm, n_m = split_edge(h, cm)
+        Mm, n_e = split_edge(h, ce)
+        targets |= {Bm["id"], Mm["id"]}
+        touched |= {h["id"], Bm["id"], Mm["id"], e["id"]}
+        Be, nJ = split_edge(e, Jp)
+        Rx = {"id": len(edges), "osm": 0, "hw": "motorway_link", "type": "ramp_1lane", "prio": 4, "oneway": True,
+              "reverse": False, "a": n_e, "b": nJ, "pts": [list(ce), list(Jp)], "len": round(math.dist(ce, Jp), 1)}
+        edges.append(Rx)
+        Rm = {"id": len(edges), "osm": 0, "hw": "motorway_link", "type": "ramp_1lane", "prio": 4, "oneway": True,
+              "reverse": False, "a": nJ, "b": n_m, "pts": [list(Jp), list(cm)], "len": round(math.dist(Jp, cm), 1)}
+        edges.append(Rm)
+
+        def dfrom(pp):
+            o_, tg = pp[0], pp[-1]
+            acc2 = 0.0
+            for p_, q_ in zip(pp, pp[1:]):
+                acc2 += math.dist(p_, q_)
+                if acc2 >= 15:
+                    tg = q_
+                    break
+            dx_, dz_ = tg[0] - o_[0], tg[1] - o_[1]
+            LL = math.hypot(dx_, dz_) or 1
+            return [round(dx_ / LL, 4), round(dz_ / LL, 4)]
+        dirs_ = [dfrom(e["pts"][::-1]), dfrom(Be["pts"]), dfrom([list(Jp), list(ce)]), dfrom([list(Jp), list(cm)])]
+        chosen.append({"id": len(chosen), "node": nJ, "x": Jp[0], "z": Jp[1], "shape": "x", "forced": True,
+                       "arms": [{"edge": e["id"], "end": "b", "cls": "r1", "dir": dirs_[0]},
+                                {"edge": Be["id"], "end": "a", "cls": "r1", "dir": dirs_[1]},
+                                {"edge": Rx["id"], "end": "b", "cls": "r1", "dir": dirs_[2]},
+                                {"edge": Rm["id"], "end": "a", "cls": "r1", "dir": dirs_[3]}]})
+        hwj.append({"id": len(hwj), "node": n_e, "x": ce[0], "z": ce[1], "kind": "exit",
+                    "travel": [round(tx, 4), round(tz, 4)], "forced": True,
+                    "arms": [{"edge": h["id"], "end": "b", "role": "in"}, {"edge": Mm["id"], "end": "a", "role": "out"},
+                             {"edge": Rx["id"], "end": "a", "role": "ramp"}]})
+        hwj.append({"id": len(hwj), "node": n_m, "x": cm[0], "z": cm[1], "kind": "merge",
+                    "travel": [round(tx, 4), round(tz, 4)], "forced": True,
+                    "arms": [{"edge": Mm["id"], "end": "b", "role": "in"}, {"edge": Bm["id"], "end": "a", "role": "out"},
+                             {"edge": Rm["id"], "end": "b", "role": "ramp"}]})
+        centers += [ce, cm, Jp]
+        allj = chosen + hwj + forks
+        made += 1
+        print(f"  şerit erişimi (yarım elmas, yan yolda X): grup {L / 1000:.1f} km, {[round(v) for v in Jp]}")
+    return made
+
+
+def add_connectors(edges, junctions, links, min_comp=8000.0, max_len=600.0, clear=45.0, targets=None):
+    """Ana ağdan kopuk büyük şehir ağları (Darıca: ana ağa yalnız prefab sığmayan sıkışık otoyol kavşaklarında
+    değiyordu) için kısa bağlantı yolu: iki ağın birbirine en yakın, prefablardan uzak ve başka yolu kesmeyen noktaları
+    arasına iki yönlü şehir yolu konur; uçları 1,5 m açıkta bırakılır, force_tees T kavşakla bağlar (2026-11-23)."""
+    from shapely.geometry import Point
+    from shapely.strtree import STRtree
+    comp = comp_finder(edges, junctions, links)
+    clen = Counter()
+    for e in edges:
+        clen[comp(e["id"])] += e["len"]
+    main = clen.most_common(1)[0][0]
+    # targets verilirse (güçlü bağlı ağın kenarları): hedef = o ağ, kaynak = dışında kalan büyük bileşen parçaları
+    in_main = (lambda e: e["id"] in targets) if targets is not None else (lambda e: comp(e["id"]) == main)
+    if targets is not None:
+        # kaynak grupları yalnız güçlü bağlı ağ DIŞINDAKİ kenarlar üzerinden (aksi halde Darıca ana yönsüz bileşenin
+        # bir parçası sayılıp bağlantı başka yere konuyordu)
+        nt = {e["id"] for e in edges if e["id"] not in targets}
+        sub_j = [{"arms": [a_ for a_ in j["arms"] if a_["edge"] in nt]} for j in junctions]
+        comp = comp_finder(edges, sub_j, [l for l in links if l[0] in nt and l[2] in nt])
+        clen = Counter()
+        for e in edges:
+            if e["id"] not in targets:
+                clen[comp(e["id"])] += e["len"]
+        main = None
+    TW = [e for e in edges if e["type"] in CITY or e["type"] in R2]
+    centers = [(j["x"], j["z"]) for j in junctions]
+    cgrid = defaultdict(list)
+    for c in centers:
+        cgrid[(int(c[0] // 100), int(c[1] // 100))].append(c)
+
+    def clear_of(p):
+        gx, gz = int(p[0] // 100), int(p[1] // 100)
+        return all(math.dist(p, q) >= clear for dx in (-1, 0, 1) for dz in (-1, 0, 1) for q in cgrid[(gx + dx, gz + dz)])
+
+    def samples(e):
+        ln = LineString(e["pts"])
+        out = []
+        d = 48.0
+        while d <= ln.length - 48.0:
+            q = ln.interpolate(d)
+            q2 = ln.interpolate(d + 2.0)
+            L = math.dist((q.x, q.y), (q2.x, q2.y)) or 1
+            out.append(((q.x, q.y), ((q2.x - q.x) / L, (q2.y - q.y) / L)))
+            d += 12.0
+        return out
+    mpts = [(p_, t_, e["id"]) for e in TW if in_main(e) for p_, t_ in samples(e)]
+    if not mpts:
+        return 0
+    mtree = STRtree([Point(p_) for p_, _, _ in mpts])
+    allines = [LineString(e["pts"]) for e in edges]
+    atree = STRtree(allines)
+    hwl = [LineString(e["pts"]) for e in edges if e["type"].startswith("hw") or e["type"] == "ramp_1lane"]
+    htree = STRtree(hwl)
+
+    def off_hw(p):
+        P = Point(p)
+        return all(hwl[q].distance(P) >= 10.0 for q in htree.query(P.buffer(10.0)))
+    added = 0
+    for c, L in clen.most_common():
+        if c == main or L < min_comp:
+            continue
+        best = None
+        DBG = Counter()
+        for e in TW:
+            if comp(e["id"]) != c or in_main(e):
+                continue
+            for p1, t1 in samples(e):
+                DBG["tw örnek"] += 1
+                if not clear_of(p1) or not off_hw(p1):
+                    DBG["tw p1 yakın"] += 1
+                    continue
+                for k in mtree.query(Point(p1).buffer(max_len)):
+                    p2, t2, eid2 = mpts[k]
+                    d = math.dist(p1, p2)
+                    if d < 48 or d > max_len or (best and d >= best[0]):
+                        continue
+                    ux, uz = (p2[0] - p1[0]) / d, (p2[1] - p1[1]) / d
+                    if abs(ux * t1[0] + uz * t1[1]) > 0.85 or abs(ux * t2[0] + uz * t2[1]) > 0.85:
+                        DBG["tw dik değil"] += 1
+                        continue  # T için bağlantı yola yaklaşık dik olmalı
+                    if not clear_of(p2) or not off_hw(p2):
+                        DBG["tw p2 yakın"] += 1
+                        continue
+                    seg = LineString([p1, p2])
+                    if any(allines[q].distance(Point(p1)) > 0.5 and allines[q].distance(Point(p2)) > 0.5
+                           and allines[q].intersects(seg) for q in atree.query(seg)):
+                        DBG["tw kesişiyor"] += 1
+                        continue
+                    best = (d, p1, p2, ux, uz)
+        if not best:
+            # ikinci seçenek: otoyol/bölünmüş yol şeridine (sağ yandan) çıkış/katılma ile (force_hw_tees bağlar)
+            lanes = [e for e in edges if e["type"] == "hw3_oneway" and not e.get("reverse") and e["len"] > 120
+                     and (targets is None or e["id"] in targets)]
+            for e in TW:
+                if comp(e["id"]) != c or in_main(e):
+                    continue
+                for p1, t1 in samples(e):
+                    DBG["örnek"] += 1
+                    if not clear_of(p1) or not off_hw(p1):
+                        DBG["p1 prefab/otoyol yakın"] += 1
+                        continue
+                    for h in lanes:
+                        ln = LineString(h["pts"])
+                        if ln.distance(Point(p1)) > max_len:
+                            continue
+                        s_ = ln.project(Point(p1))
+                        if s_ < 50 or ln.length - s_ < 50:
+                            continue
+                        Q = ln.interpolate(s_)
+                        p2 = (Q.x, Q.y)
+                        d = math.dist(p1, p2)
+                        if d < 48 or (best and d >= best[0]):
+                            continue
+                        if any(math.dist(p2, q) < 52 for q in centers):
+                            DBG["p2 prefab yakın"] += 1
+                            continue
+                        A1, A2 = ln.interpolate(max(0, s_ - 5)), ln.interpolate(min(ln.length, s_ + 5))
+                        tl = math.dist((A1.x, A1.y), (A2.x, A2.y)) or 1
+                        tx, tz = (A2.x - A1.x) / tl, (A2.y - A1.y) / tl
+                        ux, uz = (p2[0] - p1[0]) / d, (p2[1] - p1[1]) / d
+                        if (-ux) * (-tz) + (-uz) * tx < 0.5:
+                            DBG["sol taraf"] += 1
+                            continue  # bağlantı şeridin sağından gelmeli
+                        if abs(ux * t1[0] + uz * t1[1]) > 0.75:
+                            DBG["dik değil"] += 1
+                            continue
+                        seg = LineString([p1, (p2[0] - ux * 2, p2[1] - uz * 2)])
+                        if any(allines[q].distance(Point(p1)) > 0.5 and allines[q].intersects(seg)
+                               for q in atree.query(seg)):
+                            DBG["kesişiyor"] += 1
+                            continue
+                        best = (d, p1, p2, ux, uz)
+        if not best:
+            print(f"  bağlantı yolu bulunamadı: bileşen {L / 1000:.1f} km {dict(DBG)}")
+            continue
+        d, p1, p2, ux, uz = best
+        a_ = (p1[0] + ux * 1.5, p1[1] + uz * 1.5)
+        b_ = (p2[0] - ux * 1.5, p2[1] - uz * 1.5)
+        n0 = max(max(e["a"], e["b"]) for e in edges) + 1
+        pts = [list(a_)]
+        nseg = max(1, int((d - 3) // 60))
+        for i in range(1, nseg):
+            t = i / nseg
+            pts.append([a_[0] + (b_[0] - a_[0]) * t, a_[1] + (b_[1] - a_[1]) * t])
+        pts.append(list(b_))
+        edges.append({"id": len(edges), "osm": 0, "hw": "tertiary", "type": "r1_city", "prio": 6, "oneway": False,
+                      "reverse": False, "a": n0, "b": n0 + 1, "pts": pts, "len": round(d - 3.0, 1), "connector": True})
+        mpts += [(q_, t_, len(edges) - 1) for q_, t_ in []]
+        centers += [p1, p2]
+        cgrid[(int(p1[0] // 100), int(p1[1] // 100))].append(p1)
+        cgrid[(int(p2[0] // 100), int(p2[1] // 100))].append(p2)
+        added += 1
+        print(f"  bağlantı yolu: bileşen {L / 1000:.1f} km → ana ağ, {d:.0f} m, {[round(v) for v in p1]}")
+    return added
+
+
+def force_tees(edges, chosen, others, links, a, gap=42.0, need=28.0, reach=60.0):
+    """T kopukluğu onarımı: iki yönlü bir yolun boşta kalan ucu başka bir iki yönlü yolun ORTASINA değiyorsa (önceki
+    turlarda kısa kol / yakın kavşak yüzünden prefab alamamış kesişim; 4c'de geçen yol tek parçaya birleşti) geçen yol
+    o noktada bölünür ve T (iki uç değiyorsa X) kavşak prefabı konur. Darıca ve Karamürsel'in şehir içi ağı bu
+    kopukluklarla ana ağdan ayrıydı (2026-11-23). Koşul: her kol ≥ need m, başka prefaba ≥ gap m, açı uyuyor."""
+    from shapely.geometry import Point
+    from shapely.strtree import STRtree
+    # şehir yolu görünümleri oyunda her zaman çift yönlü yol öğesi (tek yönlü OSM yolları da; yalnız rampa/otoyol şeridi
+    # tek yönlü görünümde) → tek yönlü şehir yolları da T kavşağa bağlanabilir
+    TWT = lambda e: e["type"] in CITY or e["type"] in R2 or e["type"] == "service"
+    centers = [(j["x"], j["z"]) for j in chosen + others]
+    next_node = max(max(e["a"], e["b"]) for e in edges) + 1
+    made, extended = 0, [0]
+
+    def arm_need(e_, far_used):
+        # prefab düğümü merkezden 18 m (r1) / 23,25 m (r2); kalan yol ≥ 4 m, karşı uç prefablıysa onun kolu da
+        return (23.5 if e_["type"] in R2 else 18.5) + (22.0 if far_used else 4.0)
+    for _pass in range(4):
+        E = {e["id"]: e for e in edges}
+        used = {(arm["edge"], arm["end"]) for j in chosen + others for arm in j["arms"]}
+        used |= {(l[0], l[1]) for l in links} | {(l[2], l[3]) for l in links}
+        tw = [e for e in edges if TWT(e)]
+        lines = [LineString(e["pts"]) for e in tw]
+        tree = STRtree(lines)
+        cgrid = defaultdict(list)
+        for c in centers:
+            cgrid[(int(c[0] // 50), int(c[1] // 50))].append(c)
+
+        def near_c(p):
+            gx, gz = int(p[0] // 50), int(p[1] // 50)
+            return any(math.dist(p, q) < gap for dx in (-1, 0, 1) for dz in (-1, 0, 1) for q in cgrid[(gx + dx, gz + dz)])
+        hits = defaultdict(list)  # (geçen kenar) -> [(s, sap kenar, uç)]
+        comp = comp_finder(edges, chosen + others, links)
+        allines = [LineString(e["pts"]) for e in edges]
+        edges_idx = [e["id"] for e in edges]
+        atree = STRtree(allines)
+        endcount = Counter()
+        for e in edges:
+            endcount[tuple(round(v, 1) for v in e["pts"][0])] += 1
+            endcount[tuple(round(v, 1) for v in e["pts"][-1])] += 1
+        hw_armed = {arm["edge"] for j in others if "kind" in j for arm in j["arms"]}  # otoyol prefabı ve rampa çatalı kolları
+        for e in tw + [e for e in edges if e["type"] == "ramp_1lane"]:
+            for end in ("a", "b"):
+                oth = "b" if end == "a" else "a"
+                if (e["id"], end) in used or e["len"] < arm_need(e, (e["id"], oth) in used):
+                    continue
+                p = e["pts"][0] if end == "a" else e["pts"][-1]
+                P = Point(p)
+                dead = endcount[tuple(round(v, 1) for v in p)] == 1 and e["type"] != "ramp_1lane"
+                best = None
+                for i in tree.query(P.buffer(reach if dead else 3.0)):
+                    h = tw[i]
+                    d_ = lines[i].distance(P)
+                    if h["id"] == e["id"] or d_ > (reach if dead else 3.0):
+                        continue
+                    if d_ > 3.0:
+                        # uzatma yalnız ayrı bileşenleri birleştirmek için ve başka yolu kesmeden
+                        if comp(h["id"]) == comp(e["id"]):
+                            continue
+                        Q = lines[i].interpolate(lines[i].project(P))
+                        seg = LineString([p, (Q.x, Q.y)])
+                        if any(edges_idx[k_] not in (e["id"], h["id"]) and allines[k_].distance(Q) > 0.5
+                               and allines[k_].crosses(seg) for k_ in atree.query(seg)):
+                            continue
+                    s_ = lines[i].project(P)
+                    if s_ < arm_need(h, (h["id"], "a") in used) or                             lines[i].length - s_ < arm_need(h, (h["id"], "b") in used):
+                        continue
+                    if best is None or d_ < best[0]:
+                        best = (d_, h["id"], s_)
+                if best:
+                    hits[best[1]].append((best[2], e["id"], end))
+        done_edges, new_edges, splits = set(), [], 0
+        for hid, lst in hits.items():
+            lst.sort()
+            s_, sid, send = lst[0]
+            stems = [(sid, send)] + [(x[1], x[2]) for x in lst[1:] if abs(x[0] - s_) < 3.0 and x[1] != sid][:1]
+            if hid in done_edges or any(x[0] in done_edges for x in stems):
+                continue
+            h = E[hid]
+            ln = LineString(h["pts"])
+            X = ln.interpolate(s_)
+            c = (round(X.x, 3), round(X.y, 3))
+            if near_c(c):
+                continue
+            # bölme noktası, iki yön ve sap yönleri
+            pts = h["pts"]
+            acc, k = 0.0, 0
+            while k < len(pts) - 1 and acc + math.dist(pts[k], pts[k + 1]) < s_:
+                acc += math.dist(pts[k], pts[k + 1])
+                k += 1
+            A_pts = [list(q) for q in pts[:k + 1]] + [list(c)]
+            B_pts = [list(c)] + [list(q) for q in pts[k + 1:]]
+            if math.dist(A_pts[-2], c) < 0.5:
+                A_pts.pop(-2)
+            if math.dist(B_pts[1], c) < 0.5:
+                B_pts.pop(1)
+            if len(A_pts) < 2 or len(B_pts) < 2:
+                continue
+
+            def dir_from(ps):
+                o, acc_, tgt = ps[0], 0.0, ps[-1]
+                for p_, q_ in zip(ps, ps[1:]):
+                    acc_ += math.dist(p_, q_)
+                    if acc_ >= 15:
+                        tgt = q_
+                        break
+                dx, dz = tgt[0] - o[0], tgt[1] - o[1]
+                L = math.hypot(dx, dz) or 1
+                return [round(dx / L, 4), round(dz / L, 4)]
+            arms = [(None, "A", dir_from(A_pts[::-1]), h), (None, "B", dir_from(B_pts), h)]
+            def stem_pts(se, send_):
+                ps = se["pts"] if send_ == "a" else se["pts"][::-1]
+                if math.dist(ps[0], c) > 3.0:  # uzatılan çıkmaz uç
+                    return [list(c)] + [list(q) for q in ps]
+                return [list(c)] + [list(q) for q in ps[1:]]
+            for sid_, send_ in stems:
+                se = E[sid_]
+                arms.append((sid_, send_, dir_from(stem_pts(se, send_)), se))
+            cl = [cls(x[3]["type"]) if x[3]["type"] != "service" else "r1" for x in arms]
+            if (cl.count("r1"), cl.count("r2")) not in PATTERNS:
+                continue
+            if len(arms) == 4 and (cl[0] != cl[1] or cl[2] != cl[3]):
+                continue
+            dirs = [x[2] for x in arms]
+            if any(dirs[i][0] * dirs[j][0] + dirs[i][1] * dirs[j][1] > 0.9 for i in range(len(dirs)) for j in range(i)):
+                continue
+            lens = [s_, h["len"] - s_] + [E[x[0]]["len"] for x in stems]
+            err, shape = prefab_angle_error(dirs, cl, lens)
+            if err > a.max_angle:
+                continue
+            # bölme
+            nid = next_node
+            next_node += 1
+            B = dict(h, id=len(edges) + len(new_edges), a=nid, pts=B_pts)
+            old_b = h["b"]
+            h["pts"], h["b"] = A_pts, nid
+            B["b"] = old_b
+            for e2 in (h, B):
+                e2["len"] = round(sum(math.dist(p_, q_) for p_, q_ in zip(e2["pts"], e2["pts"][1:])), 1)
+            for j in chosen + others:
+                for arm in j["arms"]:
+                    if arm["edge"] == hid and arm["end"] == "b":
+                        arm["edge"] = B["id"]
+            for lk in links:
+                for q_ in (0, 2):
+                    if lk[q_] == hid and lk[q_ + 1] == "b":
+                        lk[q_] = B["id"]
+            new_edges.append(B)
+            for sid_, send_ in stems:
+                se = E[sid_]
+                if se["type"] == "ramp_1lane" and sid_ not in hw_armed:
+                    se.update(type="r1_city", oneway=False, reverse=False)  # şehir kavşağına bağlanan rampa
+                sp_ = stem_pts(se, send_)
+                se["pts"] = sp_ if send_ == "a" else sp_[::-1]
+                se[send_] = nid
+                se["len"] = round(sum(math.dist(p_, q_) for p_, q_ in zip(se["pts"], se["pts"][1:])), 1)
+                if len(se["pts"]) > 2 and math.dist(se["pts"][0 if send_ == "a" else -1], se["pts"][1 if send_ == "a" else -2]) > 3:
+                    extended[0] += 1
+            jarms = [{"edge": hid, "end": "b", "cls": cl[0], "dir": dirs[0]},
+                     {"edge": B["id"], "end": "a", "cls": cl[1], "dir": dirs[1]}]
+            for (sid_, send_), cc, dd in zip(stems, cl[2:], dirs[2:]):
+                jarms.append({"edge": sid_, "end": send_, "cls": cc, "dir": dd})
+            chosen.append({"id": len(chosen), "node": nid, "x": c[0], "z": c[1], "shape": shape, "arms": jarms,
+                           "forced": True})
+            centers.append(c)
+            cgrid[(int(c[0] // 50), int(c[1] // 50))].append(c)
+            done_edges.add(hid)
+            done_edges |= {x[0] for x in stems}
+            splits += 1
+        edges += new_edges
+        made += splits
+        if not splits:
+            break
+    print(f"T kopukluğu onarımı: {made} kavşak (yol bölünerek; {extended[0]} çıkmaz uç uzatıldı)")
+    return edges, chosen
+
+
+def force_hw_tees(edges, chosen, hwj, forks, links, a, reach=60.0):
+    """Şehir yolunun tek yönlü otoyol/bölünmüş yol şeridine T olarak değdiği yerler (Darıca D-100, Karamürsel D-130):
+    şerit bölünür, çıkış ya da katılma prefabı konur; şehir yolunun ilk ~20 m'si tek yönlü rampa olur, kalanı uç
+    bağlantısıyla devam eder. Çıkış/katılma seçimi sapın şeride göre açısından (ileri bakan = çıkış)."""
+    from shapely.geometry import Point
+    from shapely.strtree import STRtree
+    PL = a.hw_prefab_len
+    allj = chosen + hwj + forks
+    used = {(arm["edge"], arm["end"]) for j in allj for arm in j["arms"]}
+    used |= {(l[0], l[1]) for l in links} | {(l[2], l[3]) for l in links}
+    comp = comp_finder(edges, allj, links)
+    E = {e["id"]: e for e in edges}
+    lanes = [e for e in edges if e["type"] == "hw3_oneway" and not e.get("reverse")]
+    llines = [LineString(e["pts"]) for e in lanes]
+    ltree = STRtree(llines)
+    allines = [LineString(e["pts"]) for e in edges]
+    atree = STRtree(allines)
+    centers = [(j["x"], j["z"]) for j in allj]
+    endcount = Counter()
+    for e in edges:
+        endcount[tuple(round(v, 1) for v in e["pts"][0])] += 1
+        endcount[tuple(round(v, 1) for v in e["pts"][-1])] += 1
+    next_node = max(max(e["a"], e["b"]) for e in edges) + 1
+    done, made, kinds = set(), 0, Counter()
+    for e in [e for e in edges if e["type"] in CITY or e["type"] in R2]:
+        for end in ("a", "b"):
+            if (e["id"], end) in used or e["id"] in done or e["len"] < 30:
+                continue
+            p = e["pts"][0] if end == "a" else e["pts"][-1]
+            P = Point(p)
+            dead = endcount[tuple(round(v, 1) for v in p)] == 1
+            best = None
+            for i in ltree.query(P.buffer(reach if dead else 3.0)):
+                h = lanes[i]
+                d_ = llines[i].distance(P)
+                if h["id"] in done or d_ > (reach if dead else 3.0) or comp(h["id"]) == comp(e["id"]):
+                    continue
+                s_ = llines[i].project(P)
+                Q = llines[i].interpolate(s_)
+                if d_ > 3.0:
+                    seg = LineString([p, (Q.x, Q.y)])
+                    if any(E_id not in (e["id"], h["id"]) and allines[k_].crosses(seg)
+                           for k_ in atree.query(seg) for E_id in [edges[k_]["id"]]):
+                        continue
+                if best is None or d_ < best[0]:
+                    best = (d_, i, s_, (Q.x, Q.y))
+            if not best:
+                continue
+            _, i, s_, c = best
+            h = lanes[i]
+            L = llines[i].length
+            if any(math.dist(c, q) < PL + 20 for q in centers):
+                continue
+            # akış yönü ve sapın tarafı
+            A1 = llines[i].interpolate(max(0, s_ - 5))
+            A2 = llines[i].interpolate(min(L, s_ + 5))
+            tl = math.dist((A1.x, A1.y), (A2.x, A2.y)) or 1
+            tx, tz = (A2.x - A1.x) / tl, (A2.y - A1.y) / tl
+            ps = e["pts"] if end == "a" else e["pts"][::-1]
+            far = ps[min(len(ps) - 1, 1)]
+            if math.dist(ps[0], c) > 3.0:
+                far = ps[0]
+            sd = (far[0] - c[0], far[1] - c[1])
+            sl = math.hypot(*sd) or 1
+            sd = (sd[0] / sl, sd[1] / sl)
+            if sd[0] * (-tz) + sd[1] * tx <= 0.2:
+                continue  # sap şeridin solunda: sağdan trafik prefabı yok
+            fwd = sd[0] * tx + sd[1] * tz
+            # Yarım elmas: aynı şeritte çıkış (s-25) + katılma (s+25), iki rampa şehir yolunda 30 m içeride T
+            # kavşakta birleşir → ilçeye hem girilir hem çıkılır (tek çıkış/katılma yönlü tuzak yaratıyordu: depo/garaj
+            # karşılıklı erişilemiyor, HQ'da iş çıkmayabiliyordu, 2026-11-23).
+            ps_st = [list(c)] + ([list(q) for q in ps] if math.dist(ps[0], c) > 3.0 else [list(q) for q in ps[1:]])
+            st_len = sum(math.dist(p_, q_) for p_, q_ in zip(ps_st, ps_st[1:]))
+            far_used = (e["id"], "b" if end == "a" else "a") in used
+            se_, sm_ = s_ - 25.0, s_ + 25.0
+            if (se_ >= PL + 6 and L - sm_ >= PL + 6 and st_len >= 30.0 + (40.5 if far_used else 22.5)
+                    and all(math.dist(q, z) >= PL + 20 for q in centers
+                            for z in [(llines[i].interpolate(se_).x, llines[i].interpolate(se_).y),
+                                      (llines[i].interpolate(sm_).x, llines[i].interpolate(sm_).y)])):
+                LS = LineString(ps_st)
+                Jp = LS.interpolate(30.0)
+                J = (Jp.x, Jp.y)
+                if all(math.dist(J, q) >= 42 for q in centers):
+                    ce = (llines[i].interpolate(se_).x, llines[i].interpolate(se_).y)
+                    cm = (llines[i].interpolate(sm_).x, llines[i].interpolate(sm_).y)
+
+                    def split_lane(hh, cut):
+                        hp = hh["pts"]
+                        lnh = LineString(hp)
+                        sc = lnh.project(Point(cut))
+                        acc_, kk = 0.0, 0
+                        while kk < len(hp) - 1 and acc_ + math.dist(hp[kk], hp[kk + 1]) < sc:
+                            acc_ += math.dist(hp[kk], hp[kk + 1])
+                            kk += 1
+                        Ap = [list(q) for q in hp[:kk + 1]] + [list(cut)]
+                        Bp = [list(cut)] + [list(q) for q in hp[kk + 1:]]
+                        if len(Ap) > 2 and math.dist(Ap[-2], cut) < 0.5:
+                            Ap.pop(-2)
+                        if len(Bp) > 2 and math.dist(Bp[1], cut) < 0.5:
+                            Bp.pop(1)
+                        nn = max(max(x["a"], x["b"]) for x in edges) + 1
+                        Bn = dict(hh, id=len(edges), a=nn, pts=Bp)
+                        Bn["b"] = hh["b"]
+                        hh["pts"], hh["b"] = Ap, nn
+                        for e2 in (hh, Bn):
+                            e2["len"] = round(sum(math.dist(p_, q_) for p_, q_ in zip(e2["pts"], e2["pts"][1:])), 1)
+                        for j in allj:
+                            for arm in j["arms"]:
+                                if arm["edge"] == hh["id"] and arm["end"] == "b":
+                                    arm["edge"] = Bn["id"]
+                        for lk in links:
+                            for q_ in (0, 2):
+                                if lk[q_] == hh["id"] and lk[q_ + 1] == "b":
+                                    lk[q_] = Bn["id"]
+                        edges.append(Bn)
+                        return Bn, nn
+                    Bm, n_m = split_lane(h, cm)      # h = [başlangıç..cm], Bm = [cm..son]
+                    Mm, n_e = split_lane(h, ce)      # h = [başlangıç..ce], Mm = [ce..cm]
+                    nJ = max(max(x["a"], x["b"]) for x in edges) + 1
+                    k_ = 0
+                    acc_ = 0.0
+                    while k_ < len(ps_st) - 1 and acc_ + math.dist(ps_st[k_], ps_st[k_ + 1]) < 30.0:
+                        acc_ += math.dist(ps_st[k_], ps_st[k_ + 1])
+                        k_ += 1
+                    rest = [list(J)] + ps_st[k_ + 1:]
+                    Rx = dict(e, id=len(edges), type="ramp_1lane", oneway=True, reverse=False, prio=4, osm=0,
+                              a=n_e, b=nJ, pts=[list(ce), list(J)])
+                    Rx["len"] = round(math.dist(ce, J), 1)
+                    edges.append(Rx)
+                    Rm = dict(e, id=len(edges), type="ramp_1lane", oneway=True, reverse=False, prio=4, osm=0,
+                              a=nJ, b=n_m, pts=[list(J), list(cm)])
+                    Rm["len"] = round(math.dist(J, cm), 1)
+                    edges.append(Rm)
+                    e["pts"] = rest if end == "a" else rest[::-1]
+                    e[end] = nJ
+                    e["len"] = round(sum(math.dist(p_, q_) for p_, q_ in zip(e["pts"], e["pts"][1:])), 1)
+
+                    def dfrom(pp):
+                        o_, tg = pp[0], pp[-1]
+                        acc2 = 0.0
+                        for p_, q_ in zip(pp, pp[1:]):
+                            acc2 += math.dist(p_, q_)
+                            if acc2 >= 15:
+                                tg = q_
+                                break
+                        dx_, dz_ = tg[0] - o_[0], tg[1] - o_[1]
+                        LL = math.hypot(dx_, dz_) or 1
+                        return [round(dx_ / LL, 4), round(dz_ / LL, 4)]
+                    dirs_ = [dfrom([list(J), list(ce)]), dfrom([list(J), list(cm)]), dfrom(rest)]
+                    err_, shp = prefab_angle_error(dirs_, ["r1", "r1", "r1"], [Rx["len"], Rm["len"], e["len"]])
+                    chosen.append({"id": len(chosen), "node": nJ, "x": J[0], "z": J[1], "shape": shp if err_ <= a.max_angle else "t",
+                                   "forced": True,
+                                   "arms": [{"edge": Rx["id"], "end": "b", "cls": "r1", "dir": dirs_[0]},
+                                            {"edge": Rm["id"], "end": "a", "cls": "r1", "dir": dirs_[1]},
+                                            {"edge": e["id"], "end": end, "cls": cls(e["type"]), "dir": dirs_[2]}]})
+                    hwj.append({"id": len(hwj), "node": n_e, "x": ce[0], "z": ce[1], "kind": "exit",
+                                "travel": [round(tx, 4), round(tz, 4)], "forced": True,
+                                "arms": [{"edge": h["id"], "end": "b", "role": "in"},
+                                         {"edge": Mm["id"], "end": "a", "role": "out"},
+                                         {"edge": Rx["id"], "end": "a", "role": "ramp"}]})
+                    hwj.append({"id": len(hwj), "node": n_m, "x": cm[0], "z": cm[1], "kind": "merge",
+                                "travel": [round(tx, 4), round(tz, 4)], "forced": True,
+                                "arms": [{"edge": Mm["id"], "end": "b", "role": "in"},
+                                         {"edge": Bm["id"], "end": "a", "role": "out"},
+                                         {"edge": Rm["id"], "end": "b", "role": "ramp"}]})
+                    centers += [ce, cm, J]
+                    done |= {h["id"], Bm["id"], Mm["id"], e["id"]}
+                    used.add((e["id"], end))
+                    made += 1
+                    kinds["yarım elmas"] += 1
+                    continue
+            kind = "exit" if fwd > 0.05 or (abs(fwd) <= 0.05 and made % 2 == 0) else "merge"
+            if kind == "exit" and (s_ < PL + 6 or L - s_ < 12):
+                kind = "merge"
+            if kind == "merge" and (L - s_ < PL + 6 or s_ < 12):
+                continue
+            # şeridi böl
+            pts = h["pts"]
+            acc, k = 0.0, 0
+            while k < len(pts) - 1 and acc + math.dist(pts[k], pts[k + 1]) < s_:
+                acc += math.dist(pts[k], pts[k + 1])
+                k += 1
+            A_pts = [list(q) for q in pts[:k + 1]] + [list(c)]
+            B_pts = [list(c)] + [list(q) for q in pts[k + 1:]]
+            if math.dist(A_pts[-2], c) < 0.5:
+                A_pts.pop(-2)
+            if math.dist(B_pts[1], c) < 0.5:
+                B_pts.pop(1)
+            if len(A_pts) < 2 or len(B_pts) < 2:
+                continue
+            nid, mid_n = next_node, next_node + 1
+            next_node += 2
+            B = dict(h, id=len(edges), a=nid, pts=B_pts)
+            B["b"] = h["b"]
+            h["pts"], h["b"] = A_pts, nid
+            for e2 in (h, B):
+                e2["len"] = round(sum(math.dist(p_, q_) for p_, q_ in zip(e2["pts"], e2["pts"][1:])), 1)
+            for j in allj:
+                for arm in j["arms"]:
+                    if arm["edge"] == h["id"] and arm["end"] == "b":
+                        arm["edge"] = B["id"]
+            for lk in links:
+                for q_ in (0, 2):
+                    if lk[q_] == h["id"] and lk[q_ + 1] == "b":
+                        lk[q_] = B["id"]
+            edges.append(B)
+            # sap: c'den başlayan nokta dizisi; ilk 20 m rampa
+            sp = [list(c)] + ([list(q) for q in ps] if math.dist(ps[0], c) > 3.0 else [list(q) for q in ps[1:]])
+            acc, k = 0.0, 0
+            while k < len(sp) - 1 and acc + math.dist(sp[k], sp[k + 1]) < 20.0:
+                acc += math.dist(sp[k], sp[k + 1])
+                k += 1
+            t_ = (20.0 - acc) / (math.dist(sp[k], sp[k + 1]) or 1)
+            m = [sp[k][0] + (sp[k + 1][0] - sp[k][0]) * t_, sp[k][1] + (sp[k + 1][1] - sp[k][1]) * t_]
+            ramp_pts = sp[:k + 1] + [m]
+            rest_pts = [m] + sp[k + 1:]
+            if kind == "merge":
+                ramp_pts = ramp_pts[::-1]
+            R = dict(e, id=len(edges), type="ramp_1lane", oneway=True, reverse=False, prio=4,
+                     a=(nid if kind == "exit" else mid_n), b=(mid_n if kind == "exit" else nid), pts=ramp_pts)
+            R["len"] = round(sum(math.dist(p_, q_) for p_, q_ in zip(R["pts"], R["pts"][1:])), 1)
+            edges.append(R)
+            # kalan şehir yolu: c tarafındaki ucu m'ye taşınır
+            e["pts"] = rest_pts if end == "a" else rest_pts[::-1]
+            e[end] = mid_n
+            e["len"] = round(sum(math.dist(p_, q_) for p_, q_ in zip(e["pts"], e["pts"][1:])), 1)
+            links.append([R["id"], "b" if kind == "exit" else "a", e["id"], end])
+            hwj.append({"id": len(hwj), "node": nid, "x": c[0], "z": c[1], "kind": kind,
+                        "travel": [round(tx, 4), round(tz, 4)], "forced": True,
+                        "arms": [{"edge": h["id"], "end": "b", "role": "in"},
+                                 {"edge": B["id"], "end": "a", "role": "out"},
+                                 {"edge": R["id"], "end": "a" if kind == "exit" else "b", "role": "ramp"}]})
+            centers.append(c)
+            done |= {h["id"], B["id"], e["id"]}
+            used.add((e["id"], end))
+            made += 1
+            kinds[kind] += 1
+    print(f"şehir yolu-otoyol şeridi T onarımı: {made} ({dict(kinds)})")
+    return edges
+
+
+LINK_REJ = ROOT / "data" / "processed" / "link_rejects.json"
+
+
+def filter_links(edges, links):
+    """C#'ın uç birleştirme güvenlik kuralının aynısı (Program.cs 2b): uçlar ≤ 6,5 m, yollar ≥ 3 m kalır, ≥105° dönüş
+    yok; ayrıca önceki C# derlemesinde başarısız olan birleşim noktaları (link_rejects.json, birikimli). Doğrulama ve
+    depo/garaj yerleşimi oyundaki gerçek bağlantılarla yapılsın diye."""
+    rej = set()
+    if LINK_REJ.exists():
+        rej = {(int(round(x * 10)), int(round(z * 10))) for x, z in json.loads(LINK_REJ.read_text())}
+    E = {e["id"]: e for e in edges}
+
+    def info(e, end):
+        ps = e["pts"] if end == "b" else e["pts"][::-1]  # ps[-1] = uç
+        tip = ps[-1]
+        other = None
+        for q in reversed(ps[:-1]):
+            if math.dist(q, tip) > 3.0:
+                other = q
+                break
+        return tip, other
+    keep, drop = [], Counter()
+    for l in links:
+        e1, e2 = E.get(l[0]), E.get(l[2])
+        if e1 is None or e2 is None:
+            drop["kenar yok"] += 1
+            continue
+        p1, o1 = info(e1, l[1])
+        p2, o2 = info(e2, l[3])
+        key = lambda q: (int(round(q[0] * 10)), int(round(q[1] * 10)))  # C# 0,1 m'ye yuvarlıyor
+        if key(p1) in rej or key(p2) in rej:
+            drop["C# reddi"] += 1
+            continue
+        if o1 is None or o2 is None or math.dist(p1, p2) > 6.5 or math.dist(o1, p2) < 3 or math.dist(o2, p1) < 3:
+            drop["kısa/uzak"] += 1
+            continue
+        # birleşimden iki yola doğru (yönden bağımsız): düz devam ≈ -1, saç tokası > 0.25 (C#: dot(-v1, v2) < -0.25)
+        v1 = (o1[0] - p1[0], o1[1] - p1[1])
+        v2 = (o2[0] - p2[0], o2[1] - p2[1])
+        n1, n2 = math.hypot(*v1) or 1, math.hypot(*v2) or 1
+        if (v1[0] * v2[0] + v1[1] * v2[1]) / (n1 * n2) > 0.25:
+            drop["saç tokası " + e1["type"][:4] + ("(u)" if e1.get("uturn") else "(c)" if e1.get("connector") else "") + "/" + e2["type"][:4] + ("(u)" if e2.get("uturn") else "(c)" if e2.get("connector") else "")] += 1
+            continue
+        keep.append(l)
+    links[:] = keep
+    print(f"uç bağlantısı süzgeci: {len(keep)} kaldı, atılan {dict(drop)}")
+    return links
+
+
+def bezier_pts(P, t0, Q, t1, step=5.0):
+    """P'den t0 teğetiyle çıkıp Q'ya t1 teğetiyle varan kübik eğri noktaları (uçlarda yön sürekliliği)."""
+    d = math.dist(P, Q)
+    k = max(6.0, d / 2.5)
+    B1 = (P[0] + t0[0] * k, P[1] + t0[1] * k)
+    B2 = (Q[0] - t1[0] * k, Q[1] - t1[1] * k)
+    n = max(2, int((d + 2 * k) // step))
+    out = []
+    for i in range(n + 1):
+        t = i / n
+        u = 1 - t
+        out.append([u ** 3 * P[0] + 3 * u * u * t * B1[0] + 3 * u * t * t * B2[0] + t ** 3 * Q[0],
+                    u ** 3 * P[1] + 3 * u * u * t * B1[1] + 3 * u * t * t * B2[1] + t ** 3 * Q[1]])
+    out[0], out[-1] = list(P), list(Q)
+    return out
+
+
+def smooth_enough(pts, t0, t1, max_deg=35.0):
+    """5 m örneklenmiş eğride ardışık parçalar ve uç teğetleri arasında en çok max_deg dönüş."""
+    c = math.cos(math.radians(max_deg))
+    dirs = [t0]
+    for p_, q_ in zip(pts, pts[1:]):
+        L = math.dist(p_, q_)
+        if L < 1e-6:
+            continue
+        dirs.append(((q_[0] - p_[0]) / L, (q_[1] - p_[1]) / L))
+    dirs.append(t1)
+    return all(u[0] * v[0] + u[1] * v[1] >= c for u, v in zip(dirs, dirs[1:]))
+
+
+def end_tangent(e, end):
+    """Kenarın ucundaki, kenarın geometri yönündeki (a→b) birim teğet."""
+    ps = e["pts"]
+    a_, b_ = (ps[0], ps[1]) if end == "a" else (ps[-2], ps[-1])
+    L = math.dist(a_, b_) or 1
+    return ((b_[0] - a_[0]) / L, (b_[1] - a_[1]) / L)
+
+
+def uturn_links(edges, junctions, links, reach=120.0, skip_boxes=()):
+    """Boşta BİTEN tek yönlü yolu (çıkış rampası, harita sınırında biten şerit) yakındaki boşta BAŞLAYAN tek yönlü
+    yola (katılma rampası, karşı şerit) kısa bir tek yönlü bağlantı rampasıyla bağlar: kavşakta çıkıp geri katılmak
+    ve sınırda dönmek mümkün olur. Önceden 366 çıkış rampası çıkmazdı; otoyolda dönüş yoktu, depolar yönlü ağda
+    birbirine ulaşamıyordu (2026-11-23)."""
+    from shapely.geometry import Point
+    from shapely.strtree import STRtree
+    OWT = lambda t: t == "ramp_1lane" or (t.startswith("hw") and t.endswith("_oneway"))
+    used = {(a["edge"], a["end"]) for j in junctions for a in j["arms"]}
+    used |= {(l[0], l[1]) for l in links} | {(l[2], l[3]) for l in links}
+    outs, ins = [], []
+    inbox = lambda p: any(b["x0"] <= p[0] <= b["x1"] and b["z0"] <= p[1] <= b["z1"] for b in skip_boxes)
+    for e in edges:
+        if not OWT(e["type"]):
+            continue
+        if skip_boxes and (inbox(e["pts"][0]) or inbox(e["pts"][-1])):
+            continue
+        s_, t_ = ("b", "a") if e.get("reverse") else ("a", "b")
+        if (e["id"], t_) not in used:
+            outs.append((e, t_))
+        if (e["id"], s_) not in used:
+            ins.append((e, s_))
+    pt = lambda e, end: tuple(e["pts"][0] if end == "a" else e["pts"][-1])
+    itree = STRtree([Point(pt(e, end)) for e, end in ins])
+    allines = [LineString(e["pts"]) for e in edges]
+    atree = STRtree(allines)
+    cand = []
+    for e, end in outs:
+        P = pt(e, end)
+        for k in itree.query(Point(P).buffer(reach)):
+            f, fend = ins[k]
+            if f["id"] == e["id"]:
+                continue
+            Q = pt(f, fend)
+            d = math.dist(P, Q)
+            if d > reach:
+                continue
+            seg = LineString([P, Q])
+            cross = sum(1 for q in atree.query(seg) if allines[q].distance(Point(P)) > 1 and allines[q].distance(Point(Q)) > 1
+                        and allines[q].intersects(seg))
+            if cross and d > 40:
+                continue
+            ta = end_tangent(e, end)
+            tb = end_tangent(f, fend)
+            if e.get("reverse"):
+                ta = (-ta[0], -ta[1])
+            if f.get("reverse"):
+                tb = (-tb[0], -tb[1])
+            if d >= 3.0:
+                npts = bezier_pts(P, ta, Q, tb)
+                if not smooth_enough(npts, ta, tb):
+                    continue  # tır için fazla keskin (C#'ta saç tokası birleşimi)
+            cand.append((d + 50 * cross, e["id"], end, f["id"], fend, P, Q))
+    cand.sort()
+    taken, made = set(), 0
+    nn = max(max(x["a"], x["b"]) for x in edges) + 1
+    for d, eid, end, fid, fend, P, Q in cand:
+        if (eid, end) in taken or (fid, fend) in taken:
+            continue
+        taken |= {(eid, end), (fid, fend)}
+        if math.dist(P, Q) < 3.0:
+            links.append([eid, end, fid, fend])
+        else:
+            Eo = next(x for x in edges if x["id"] == eid)
+            Ei = next(x for x in edges if x["id"] == fid)
+            t0 = end_tangent(Eo, end)   # boşta biten: trafik bu yönde gelir
+            if Eo.get("reverse"):
+                t0 = (-t0[0], -t0[1])
+            t1 = end_tangent(Ei, fend)  # boşta başlayan: trafik bu yönde gider
+            if Ei.get("reverse"):
+                t1 = (-t1[0], -t1[1])
+            npts = bezier_pts(P, t0, Q, t1)
+            L = sum(math.dist(p_, q_) for p_, q_ in zip(npts, npts[1:]))
+            edges.append({"id": len(edges), "osm": 0, "hw": "motorway_link", "type": "ramp_1lane", "prio": 4,
+                          "oneway": True, "reverse": False, "a": nn, "b": nn + 1, "pts": npts, "len": round(L, 1),
+                          "uturn": True})
+            nn += 2
+            links.append([eid, end, len(edges) - 1, "a"])
+            links.append([len(edges) - 1, "b", fid, fend])
+        made += 1
+    print(f"dönüş bağlantısı: {made} (boşta biten {len(outs)}, boşta başlayan {len(ins)} tek yönlü uç)")
+
+
+def fix_city_ramp_arms(edges, chosen, others, links, cut_at=22.0):
+    """Şehir kavşağı prefabının kolu tek yönlü rampa olamaz: oyun "[traffic] Unable to determine output road lane ...
+    Failed to register Prefab item" verip kavşağı trafikten çıkarıyordu (önizleme logu, 2026-11-23). Rampanın kavşak
+    tarafındaki ilk cut_at m'si iki yönlü şehir yoluna çevrilir; kalan rampa bu parçaya yol-yol bağlantısıyla eklenir."""
+    made, conv, left = 0, 0, 0
+    drop_j = set()
+    for _pass in range(3):
+        E = {e["id"]: e for e in edges}
+        prefab_ends = {(a_["edge"], a_["end"]) for j in chosen + others for a_ in j["arms"]}
+        changed = False
+        for j in chosen:
+            for arm in j["arms"]:
+                e = E[arm["edge"]]
+                if e["type"] != "ramp_1lane":
+                    continue
+                far = "b" if arm["end"] == "a" else "a"
+                if e["len"] < cut_at + 5:
+                    if (e["id"], far) not in prefab_ends:
+                        e.update(type="r1_city", oneway=False, reverse=False)
+                        conv += 1
+                        changed = True
+                    else:
+                        left += 1  # kavşak tutulur (kaldırınca otoyol-şehir bağlantısı kopuyordu)
+                    continue
+                ps = e["pts"] if arm["end"] == "a" else e["pts"][::-1]  # kavşaktan uzağa
+                acc, k = 0.0, 0
+                while k < len(ps) - 1 and acc + math.dist(ps[k], ps[k + 1]) < cut_at:
+                    acc += math.dist(ps[k], ps[k + 1])
+                    k += 1
+                t = (cut_at - acc) / (math.dist(ps[k], ps[k + 1]) or 1)
+                m = [ps[k][0] + (ps[k + 1][0] - ps[k][0]) * t, ps[k][1] + (ps[k + 1][1] - ps[k][1]) * t]
+                near = [list(q) for q in ps[:k + 1]] + [m]
+                rest = [m] + [list(q) for q in ps[k + 1:]]
+                if len(rest) > 2 and math.dist(rest[1], m) < 0.5:
+                    rest.pop(1)
+                nn = max(max(x["a"], x["b"]) for x in edges) + 1
+                R = dict(e, id=len(edges))
+                if arm["end"] == "a":       # e = [kavşak .. m] (geometri a→b korunur), R = [m .. eski b]
+                    e["pts"], R["pts"] = near, rest
+                    R["a"], R["b"] = nn, e["b"]
+                    e["b"] = nn
+                    moved, lk_new = "b", [R["id"], "a", e["id"], "b"]
+                else:                       # kavşak b'de: e = [m .. b], R = [eski a .. m]
+                    e["pts"], R["pts"] = near[::-1], rest[::-1]
+                    R["a"], R["b"] = e["a"], nn
+                    e["a"] = nn
+                    moved, lk_new = "a", [R["id"], "b", e["id"], "a"]
+                for x in (e, R):
+                    x["len"] = round(sum(math.dist(p_, q_) for p_, q_ in zip(x["pts"], x["pts"][1:])), 1)
+                for jj in chosen + others:
+                    for a_ in jj["arms"]:
+                        if a_["edge"] == e["id"] and a_["end"] == moved:
+                            a_["edge"] = R["id"]
+                for lk in links:
+                    for q_ in (0, 2):
+                        if lk[q_] == e["id"] and lk[q_ + 1] == moved:
+                            lk[q_] = R["id"]
+                e.update(type="r1_city", oneway=False, reverse=False)
+                edges.append(R)
+                links.append(lk_new)
+                E[R["id"]] = R
+                made += 1
+                changed = True
+        if not changed:
+            break
+    # bölünemeyecek kadar kısa, öbür ucu otoyol prefabında olan rampa: kavşak kaldırılır (hatalı kavşak yerine kopukluk;
+    # bağlantı denetimi sonra yapılır)
+    if drop_j:
+        keep = [j for j in chosen if id(j) not in drop_j]
+        chosen[:] = keep
+        for i, j in enumerate(chosen):
+            j["id"] = i
+    print(f"şehir kavşağı rampa kolu: {made} bölündü, {conv} iki yönlüye çevrildi, {left} kısa kaldı")
+
+
 def heal_links(edges, junctions, links):
     """Prefabı sonradan atılan düğümlerde (şerit eşlemede bırakılan otoyol kavşağı, otoyol rampalı şehir kavşağı)
     kollar boşta kalıyordu: otoyol o noktada kopuyor, ilçeler ayrı ağlara bölünüyordu (2026-11-23). Aynı düğümde
@@ -1248,7 +2439,7 @@ def heal_links(edges, junctions, links):
           if (e["id"], end) not in used]
     cell = defaultdict(list)
     for i, (_, _, p) in enumerate(fe):
-        cell[(int(p[0] // 3), int(p[1] // 3))].append(i)
+        cell[(int(p[0] // 6), int(p[1] // 6))].append(i)
     cp = list(range(len(fe)))
 
     def cf(x):
@@ -1257,11 +2448,11 @@ def heal_links(edges, junctions, links):
             x = cp[x]
         return x
     for i, (_, _, p) in enumerate(fe):
-        gx, gz = int(p[0] // 3), int(p[1] // 3)
+        gx, gz = int(p[0] // 6), int(p[1] // 6)
         for dx in (-1, 0, 1):
             for dz in (-1, 0, 1):
                 for j in cell[(gx + dx, gz + dz)]:
-                    if j != i and math.dist(p, fe[j][2]) < 3.0:
+                    if j != i and math.dist(p, fe[j][2]) < 6.0:
                         cp[cf(i)] = cf(j)
     free = defaultdict(list)
     for i, (eid, end, _) in enumerate(fe):
@@ -1300,8 +2491,8 @@ def heal_links(edges, junctions, links):
         pairs.sort(key=lambda t: t[0])
         done = set()
         for dot, x, y in pairs:
-            if x in done or y in done or (len(ends) > 2 and dot > -0.3):
-                continue
+            if x in done or y in done or (len(ends) > 2 and dot > -0.3) or dot > 0.25:
+                continue  # dot > 0.25: ~105°'den keskin dönüş (saç tokası) → C#'ta bozuk eğri, yığın taşması
             if f(x[0]) == f(y[0]):
                 continue
             par[f(x[0])] = f(y[0])
